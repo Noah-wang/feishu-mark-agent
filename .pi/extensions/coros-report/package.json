@@ -1,0 +1,9 @@
+{
+  "name": "pi-coros-report-extension",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.25.2",
+    "mcp-remote": "0.1.29"
+  }
+}
