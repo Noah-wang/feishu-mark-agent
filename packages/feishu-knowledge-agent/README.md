@@ -23,7 +23,7 @@ Mark first classifies each Feishu message into one of four intents:
 cp packages/feishu-knowledge-agent/.env.example packages/feishu-knowledge-agent/.env
 # Fill Feishu credentials and optional X/Bitable settings.
 npm install
-npm --workspace=@noah/feishu-knowledge-agent run dev
+npm --workspace=packages/feishu-knowledge-agent run dev
 ```
 
 Health check:
@@ -125,7 +125,7 @@ only from `.knowledge/knowledge.md` on the server.
 Create the doc once:
 
 ```bash
-npm --workspace=@noah/feishu-knowledge-agent run doc:create
+npm --workspace=packages/feishu-knowledge-agent run doc:create
 ```
 
 Put the printed id in `FEISHU_DOC_ID`. You can also paste a full docx or Wiki URL into

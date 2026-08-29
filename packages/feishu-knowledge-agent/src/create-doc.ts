@@ -2,7 +2,7 @@
  * One-off bootstrap: creates the Feishu doc that the knowledge base mirrors into,
  * then prints the id to put in FEISHU_DOC_ID.
  *
- * Run with: npm --workspace=@noah/feishu-knowledge-agent run doc:create
+ * Run with: npm --workspace=packages/feishu-knowledge-agent run doc:create
  */
 
 import { loadConfig } from "./config.js";
