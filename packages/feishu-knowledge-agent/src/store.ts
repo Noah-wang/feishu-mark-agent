@@ -50,9 +50,7 @@ export class KnowledgeStore {
 		if (!records.length) return [];
 		const normalizedUrls = new Set(urls.map(normalizeUrlForMatch));
 		if (normalizedUrls.size) {
-			return records
-				.filter((record) => normalizedUrls.has(normalizeUrlForMatch(record.url)))
-				.slice(0, limit);
+			return records.filter((record) => normalizedUrls.has(normalizeUrlForMatch(record.url))).slice(0, limit);
 		}
 		return this.search(stripDeleteWords(query), limit);
 	}

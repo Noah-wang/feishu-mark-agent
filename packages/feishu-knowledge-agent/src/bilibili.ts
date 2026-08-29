@@ -21,6 +21,8 @@ export interface BilibiliVideoInfo {
 	transcribedSeconds: number;
 	partCount: number;
 	description: string;
+	/** Video cover image, used as the record thumbnail. */
+	coverUrl: string;
 }
 
 /**
@@ -51,6 +53,7 @@ interface RawVideoInfo {
 	title: string;
 	duration: number;
 	desc?: string;
+	pic?: string;
 	owner?: { name?: string };
 	pages?: Array<{ cid: number; duration: number }>;
 }
@@ -96,6 +99,8 @@ export async function fetchBilibiliSubtitle(videoId: string, config: Config): Pr
 		transcribedSeconds: transcribedPart?.duration || raw.duration,
 		partCount: parts.length || 1,
 		description: raw.desc ?? "",
+		// Bilibili serves covers over http; https works and avoids mixed-content warnings.
+		coverUrl: (raw.pic ?? "").replace(/^http:/, "https:"),
 	};
 
 	const tracks = chineseTracks(await fetchSubtitleTracks(raw, headers, timeoutMs));

@@ -1,12 +1,33 @@
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import type { Config } from "./config.js";
-import { buildKnowledgeBlocks, type DocBlock } from "./doc.js";
+import {
+	BLOCK_HEADING2,
+	BLOCK_IMAGE,
+	BLOCK_TEXT,
+	buildKnowledgeBlocks,
+	buildRecordBlocks,
+	categoryHeadingBlock,
+	categoryHeadingText,
+	type DocBlock,
+	parseCategoryHeading,
+	summaryText,
+} from "./doc.js";
 import type { FeishuDocumentTextBlock, IncomingMessage, KnowledgeRecord } from "./types.js";
 
 export type FeishuCard = Record<string, unknown>;
 
 /** Feishu rejects oversized child batches, so long archives are appended in slices. */
 const DOC_BLOCK_CHUNK = 40;
+/** Feishu caps uploaded media at 20MB; covers are far smaller, so reject anything suspicious early. */
+const MAX_DOC_IMAGE_BYTES = 10 * 1024 * 1024;
+const BROWSER_USER_AGENT =
+	"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36";
+
+function imageFileName(url: string, contentType: string | null) {
+	const fromType = contentType?.match(/image\/(png|jpe?g|webp|gif)/i)?.[1];
+	const fromUrl = url.match(/\.(png|jpe?g|webp|gif)(?:\?|$)/i)?.[1];
+	return `cover.${(fromType ?? fromUrl ?? "png").toLowerCase().replace("jpeg", "jpg")}`;
+}
 const TEXT_BLOCK_KEYS: Record<number, string> = {
 	2: "text",
 	3: "heading1",
@@ -258,6 +279,146 @@ export class FeishuClient {
 		);
 	}
 
+	/**
+	 * Inserts one record into its category section instead of rewriting the document.
+	 * A full rebuild re-uploads every cover image, and Feishu allows only three block
+	 * calls per second, so the cost of adding one link would grow with the archive.
+	 *
+	 * Returns false when the document is not in a shape this can safely edit; the
+	 * caller then falls back to `syncKnowledgeDoc`.
+	 */
+	async insertRecordIntoDoc(record: KnowledgeRecord, totalRecords: number): Promise<boolean> {
+		const documentId = await this.resolveConfiguredDocumentId();
+		if (!documentId) return false;
+
+		const children = await this.listDocumentChildren(documentId, documentId);
+		const headings = children
+			.map((child, index) => ({ index, block: child, text: extractBlockText(child) }))
+			.filter((entry) => Number(entry.block.block_type) === BLOCK_HEADING2)
+			.map((entry) => ({ ...entry, parsed: parseCategoryHeading(entry.text) }))
+			.filter((entry) => entry.parsed !== undefined);
+
+		// An empty or hand-edited document has no headings to anchor against.
+		if (!children.length) return false;
+
+		// Re-archiving an existing link must replace the old entry, which this path
+		// cannot do; a rebuild handles it correctly.
+		if (children.some((child) => extractBlockText(child).trim() === record.url)) return false;
+
+		const category = record.category || "未分类";
+		const existing = headings.find((entry) => entry.parsed?.category === category);
+		const newBlocks: DocBlock[] = [];
+		let insertIndex: number;
+
+		if (existing) {
+			const next = headings.find((entry) => entry.index > existing.index);
+			insertIndex = next ? next.index : children.length;
+		} else {
+			const after = headings.find((entry) => (entry.parsed?.category ?? "") > category);
+			insertIndex = after ? after.index : children.length;
+			newBlocks.push(categoryHeadingBlock(category, 1));
+		}
+		newBlocks.push(...buildRecordBlocks(record));
+
+		const created = await this.createDocumentChildren(documentId, newBlocks, insertIndex);
+		if (existing?.parsed) {
+			await this.replaceBlockText(
+				documentId,
+				String(existing.block.block_id),
+				categoryHeadingText(category, existing.parsed.count + 1),
+			);
+		}
+		await this.updateSummaryBlock(documentId, children, totalRecords);
+		await this.attachCoverImage(documentId, created, record);
+		console.info(`Inserted record into Feishu doc: category=${category} index=${insertIndex} title=${record.title}`);
+		return true;
+	}
+
+	/**
+	 * Feishu cannot insert an image by URL: the block is created empty, the bytes are
+	 * uploaded against that block id, and the returned token is written back.
+	 */
+	private async attachCoverImage(documentId: string, created: any[], record: KnowledgeRecord): Promise<void> {
+		const imageBlock = created.find((child) => Number(child.block_type) === BLOCK_IMAGE);
+		const blockId = imageBlock?.block_id;
+		if (!blockId) return;
+
+		for (const url of record.images.filter((item) => /^https?:\/\//i.test(item))) {
+			try {
+				const token = await this.uploadDocImage(String(blockId), url);
+				await this.docApi(
+					"PATCH",
+					`https://open.feishu.cn/open-apis/docx/v1/documents/${documentId}/blocks/${blockId}`,
+					{ replace_image: { token } },
+				);
+				console.info(`Attached cover image to Feishu doc: block=${blockId} source=${url.slice(0, 80)}`);
+				return;
+			} catch (error) {
+				console.warn(`Cover image failed, trying next source: ${url.slice(0, 80)}`, error);
+			}
+		}
+	}
+
+	private async uploadDocImage(blockId: string, url: string): Promise<string> {
+		// Bilibili rejects image requests without a matching referer.
+		const response = await fetch(url, {
+			headers: { "User-Agent": BROWSER_USER_AGENT, Referer: new URL(url).origin },
+		});
+		if (!response.ok) throw new Error(`Image download failed: HTTP ${response.status}`);
+		const bytes = new Uint8Array(await response.arrayBuffer());
+		if (!bytes.byteLength) throw new Error("Image download was empty");
+		if (bytes.byteLength > MAX_DOC_IMAGE_BYTES) {
+			throw new Error(
+				`Image is ${Math.round(bytes.byteLength / 1024)}KB, over the ${MAX_DOC_IMAGE_BYTES / 1024}KB cap`,
+			);
+		}
+
+		const fileName = imageFileName(url, response.headers.get("content-type"));
+		const form = new FormData();
+		form.append("file_name", fileName);
+		form.append("parent_type", "docx_image");
+		form.append("parent_node", blockId);
+		form.append("size", String(bytes.byteLength));
+		form.append("file", new Blob([bytes]), fileName);
+
+		const token = await this.getTenantToken();
+		const upload = await fetch("https://open.feishu.cn/open-apis/drive/v1/medias/upload_all", {
+			method: "POST",
+			headers: { Authorization: `Bearer ${token}` },
+			body: form,
+		});
+		const body = (await upload.json()) as any;
+		if (!upload.ok || body.code !== 0 || !body.data?.file_token) {
+			throw new Error(`Feishu media upload failed: ${JSON.stringify(body).slice(0, 300)}`);
+		}
+		return String(body.data.file_token);
+	}
+
+	private async createDocumentChildren(documentId: string, children: DocBlock[], index: number): Promise<any[]> {
+		const body = await this.docApi(
+			"POST",
+			`https://open.feishu.cn/open-apis/docx/v1/documents/${documentId}/blocks/${documentId}/children`,
+			{ children, index },
+		);
+		const created = body.data?.children;
+		return Array.isArray(created) ? created : [];
+	}
+
+	private async replaceBlockText(documentId: string, blockId: string, text: string): Promise<void> {
+		await this.docApi("PATCH", `https://open.feishu.cn/open-apis/docx/v1/documents/${documentId}/blocks/${blockId}`, {
+			update_text_elements: { elements: [{ text_run: { content: text } }] },
+		});
+	}
+
+	/** The "共 N 条" line sits directly under the title; leave it alone if it was moved. */
+	private async updateSummaryBlock(documentId: string, children: any[], totalRecords: number): Promise<void> {
+		const summary = children.find(
+			(child) => Number(child.block_type) === BLOCK_TEXT && /^共 \d+ 条/.test(extractBlockText(child)),
+		);
+		if (!summary?.block_id) return;
+		await this.replaceBlockText(documentId, String(summary.block_id), summaryText(totalRecords));
+	}
+
 	private async resolveConfiguredDocumentId(): Promise<string> {
 		if (this.config.feishu.docId) return this.config.feishu.docId;
 		if (!this.config.feishu.docUrl) return "";
@@ -269,7 +430,8 @@ export class FeishuClient {
 			`https://open.feishu.cn/open-apis/wiki/v2/spaces/get_node?token=${encodeURIComponent(parsed.token)}`,
 		);
 		const node = body.data?.node;
-		if (!node?.obj_token) throw new Error(`Failed to resolve Feishu wiki node: ${JSON.stringify(body).slice(0, 400)}`);
+		if (!node?.obj_token)
+			throw new Error(`Failed to resolve Feishu wiki node: ${JSON.stringify(body).slice(0, 400)}`);
 		if (node.obj_type && node.obj_type !== "docx") {
 			throw new Error(`Configured Feishu wiki node is ${node.obj_type}, but Mark can only sync docx pages.`);
 		}

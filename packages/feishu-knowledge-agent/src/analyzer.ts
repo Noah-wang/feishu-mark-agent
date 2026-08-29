@@ -422,7 +422,8 @@ function normalizeAgentPlan(value: any, text: string, urls: string[]): AgentPlan
 		action,
 		query: typeof value?.query === "string" && value.query.trim() ? value.query.trim() : heuristic.query,
 		reason: typeof value?.reason === "string" && value.reason.trim() ? value.reason.trim() : heuristic.reason,
-		question: typeof value?.question === "string" && value.question.trim() ? value.question.trim() : heuristic.question,
+		question:
+			typeof value?.question === "string" && value.question.trim() ? value.question.trim() : heuristic.question,
 	};
 }
 
@@ -444,11 +445,7 @@ function heuristicIntent(text: string, urls: string[]): MessageIntent {
 	if (/^(help|帮助|怎么用|你能做什么|使用说明|说明)$/i.test(normalized) || lower.includes("how to use")) {
 		return { intent: "help", query: normalized, reason: "用户在询问使用方式" };
 	}
-	if (
-		/(删除|删掉|去掉|移除|清除|取消收录|不要收录|从资料库.*删|从知识库.*删|delete|remove|clear)/i.test(
-			normalized,
-		)
-	) {
+	if (/(删除|删掉|去掉|移除|清除|取消收录|不要收录|从资料库.*删|从知识库.*删|delete|remove|clear)/i.test(normalized)) {
 		return { intent: "delete_records", query: normalized, reason: "用户想删除已收录资料" };
 	}
 	if (

@@ -190,7 +190,7 @@ async function handleMessage(
 						? "我已经读了飞书资料库文档，也查了本地已收录资料，暂时没有发现明显需要翻译的英文条目。你可以把那一段直接发给我，或者给我更具体的标题。"
 						: docTranslation.status === "permission_error"
 							? `${docTranslation.message}\n\n我也查了本地已收录资料，没有找到明显需要翻译的英文条目。`
-						: "我没有在已收录资料里找到明显需要翻译的英文条目。你可以把那一段直接发给我，或者发更具体的标题。",
+							: "我没有在已收录资料里找到明显需要翻译的英文条目。你可以把那一段直接发给我，或者发更具体的标题。",
 					"yellow",
 				);
 				return;
@@ -301,9 +301,9 @@ async function handleMessage(
 			await finishProgressCard(feishu, chatId, progress, "收录完成", renderArchiveReply(records, config), "green");
 			// The local store is the source of truth; a doc sync failure must not make a
 			// successful archive look failed, so it runs after the card and only logs.
-			void feishu
-				.syncKnowledgeDoc(await store.list())
-				.catch((error) => console.error("Failed to sync Feishu knowledge doc", error));
+			void addRecordsToKnowledgeDoc(feishu, store, records).catch((error) =>
+				console.error("Failed to sync Feishu knowledge doc", error),
+			);
 			return;
 		}
 
@@ -414,6 +414,25 @@ async function pickRecordsForTranslation(store: KnowledgeStore, query: string) {
 		.slice(0, 10);
 }
 
+/**
+ * Adds each new record to its category section. Falls back to a full rebuild when the
+ * document is not in a shape the incremental path can edit — an empty document, a
+ * hand-edited one, or a re-archived link whose old entry has to be replaced.
+ */
+async function addRecordsToKnowledgeDoc(feishu: FeishuClient, store: KnowledgeStore, records: KnowledgeRecord[]) {
+	for (const record of records) {
+		const total = (await store.list()).length;
+		const inserted = await feishu.insertRecordIntoDoc(record, total).catch((error) => {
+			console.warn("Incremental Feishu doc insert failed, rebuilding instead", error);
+			return false;
+		});
+		if (!inserted) {
+			await feishu.syncKnowledgeDoc(await store.list());
+			return;
+		}
+	}
+}
+
 async function syncKnowledgeDocForUser(feishu: FeishuClient, store: KnowledgeStore) {
 	try {
 		await feishu.syncKnowledgeDoc(await store.list());
@@ -497,9 +516,7 @@ function renderArchiveReply(records: KnowledgeRecord[], config: Config) {
 }
 
 function renderTranslateReply(records: KnowledgeRecord[], config: Config, syncError: string) {
-	const body = records
-		.map((record, index) => `${index + 1}. ${record.title}\n链接：${record.url}`)
-		.join("\n\n");
+	const body = records.map((record, index) => `${index + 1}. ${record.title}\n链接：${record.url}`).join("\n\n");
 	const docUrl = knowledgeDocUrl(config);
 	const docLine = docUrl ? `\n\n资料库文档：${docUrl}` : "";
 	const syncLine = syncError ? `\n\n不过飞书文档同步还没成功：${syncError}` : "";

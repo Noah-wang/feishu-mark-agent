@@ -65,7 +65,7 @@ async function extractGithub(url: string): Promise<ExtractedContent> {
 		sourceType: "github",
 		title: repoJson.full_name ?? `${repo.owner}/${repo.repo}`,
 		text: [repoJson.description, readme].filter(Boolean).join("\n\n").slice(0, 40000),
-		images: [],
+		images: githubCoverImages(repo, repoJson),
 		metadata: {
 			owner: repo.owner,
 			repo: repo.repo,
@@ -76,6 +76,19 @@ async function extractGithub(url: string): Promise<ExtractedContent> {
 			updatedAt: repoJson.updated_at,
 		},
 	};
+}
+
+/**
+ * The social preview card is the better looking image, but the shared
+ * `opengraph.githubassets.com/1/...` path is rate limited across callers, so the
+ * repo's own pushed_at is used as the cache-busting segment. The owner avatar is
+ * the fallback because it comes straight from the API response we already have.
+ */
+function githubCoverImages(repo: { owner: string; repo: string }, repoJson: Record<string, any>): string[] {
+	const cacheKey = encodeURIComponent(String(repoJson.pushed_at ?? repoJson.updated_at ?? "1"));
+	const preview = `https://opengraph.githubassets.com/${cacheKey}/${repo.owner}/${repo.repo}`;
+	const avatar = typeof repoJson.owner?.avatar_url === "string" ? repoJson.owner.avatar_url : undefined;
+	return avatar ? [preview, avatar] : [preview];
 }
 
 async function extractBilibiliOrVideo(url: string, config: Config): Promise<ExtractedContent> {
@@ -120,7 +133,7 @@ async function extractBilibiliOrVideo(url: string, config: Config): Promise<Extr
 			sourceType: "bilibili",
 			title: info.title,
 			text: withPartOnlyNotice(info, extraction.text),
-			images: [],
+			images: info.coverUrl ? [info.coverUrl] : [],
 			metadata: {
 				...baseMetadata,
 				extractor: "bilibili-subtitle-api",
@@ -137,7 +150,7 @@ async function extractBilibiliOrVideo(url: string, config: Config): Promise<Extr
 		sourceType: "bilibili",
 		title: info.title,
 		text: withNoSubtitleNotice(extraction.reason, describeVideo(info)),
-		images: [],
+		images: info.coverUrl ? [info.coverUrl] : [],
 		metadata: {
 			...baseMetadata,
 			extractor: "bilibili-metadata-fallback",
@@ -220,12 +233,17 @@ async function extractArticle(url: string): Promise<ExtractedContent> {
 	};
 }
 
+/**
+ * Attribute order is not fixed in the wild: `<meta content="…" property="og:image">`
+ * is as common as the other way round. Requiring content to follow property silently
+ * dropped the title, description, and cover image on those pages.
+ */
 function pickMeta(html: string, name: string) {
 	const pattern = new RegExp(
-		`<meta[^>]+(?:property|name)=["']${escapeRegExp(name)}["'][^>]+content=["']([^"']+)["'][^>]*>`,
+		`<meta(?=[^>]*(?:property|name)=["']${escapeRegExp(name)}["'])[^>]*content=["']([^"']*)["'][^>]*>`,
 		"i",
 	);
-	return html.match(pattern)?.[1];
+	return html.match(pattern)?.[1] || undefined;
 }
 
 function pickTag(html: string, tag: string) {
