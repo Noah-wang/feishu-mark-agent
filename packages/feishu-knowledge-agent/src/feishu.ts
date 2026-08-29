@@ -235,14 +235,26 @@ export class FeishuClient {
 		const documentId = await this.resolveConfiguredDocumentId();
 		if (!documentId) return;
 		await this.clearDocument(documentId);
-		const blocks = buildKnowledgeBlocks(records);
+		const { blocks, imageRecords } = buildKnowledgeBlocks(records);
 		// Feishu caps how many children one call may add, and a large archive would
 		// otherwise exceed it in a single request.
+		const created: any[] = [];
 		for (let index = 0; index < blocks.length; index += DOC_BLOCK_CHUNK) {
-			await this.appendDocumentBlocks(documentId, blocks.slice(index, index + DOC_BLOCK_CHUNK));
+			created.push(...(await this.appendDocumentBlocks(documentId, blocks.slice(index, index + DOC_BLOCK_CHUNK))));
 		}
+
+		// A rebuild recreates every image block, so every cover has to be uploaded again.
+		// That is why the incremental path exists; this only runs on deletion or on a
+		// document that could not be edited in place.
+		const imageBlocks = created.filter((child) => Number(child.block_type) === BLOCK_IMAGE);
+		for (const [index, imageBlock] of imageBlocks.entries()) {
+			const record = imageRecords[index];
+			if (!record || !imageBlock.block_id) continue;
+			await this.attachCoverImage(documentId, String(imageBlock.block_id), record);
+		}
+
 		console.info(
-			`Synced Feishu knowledge doc: document=${documentId} records=${records.length} blocks=${blocks.length}`,
+			`Synced Feishu knowledge doc: document=${documentId} records=${records.length} blocks=${blocks.length} covers=${imageBlocks.length}`,
 		);
 	}
 
@@ -329,7 +341,8 @@ export class FeishuClient {
 			);
 		}
 		await this.updateSummaryBlock(documentId, children, totalRecords);
-		await this.attachCoverImage(documentId, created, record);
+		const imageBlock = created.find((child) => Number(child.block_type) === BLOCK_IMAGE);
+		if (imageBlock?.block_id) await this.attachCoverImage(documentId, String(imageBlock.block_id), record);
 		console.info(`Inserted record into Feishu doc: category=${category} index=${insertIndex} title=${record.title}`);
 		return true;
 	}
@@ -338,9 +351,7 @@ export class FeishuClient {
 	 * Feishu cannot insert an image by URL: the block is created empty, the bytes are
 	 * uploaded against that block id, and the returned token is written back.
 	 */
-	private async attachCoverImage(documentId: string, created: any[], record: KnowledgeRecord): Promise<void> {
-		const imageBlock = created.find((child) => Number(child.block_type) === BLOCK_IMAGE);
-		const blockId = imageBlock?.block_id;
+	private async attachCoverImage(documentId: string, blockId: string, record: KnowledgeRecord): Promise<void> {
 		if (!blockId) return;
 
 		for (const url of record.images.filter((item) => /^https?:\/\//i.test(item))) {
@@ -459,12 +470,14 @@ export class FeishuClient {
 		return (await this.listDocumentChildren(documentId, documentId)).length;
 	}
 
-	private async appendDocumentBlocks(documentId: string, children: DocBlock[]): Promise<void> {
-		await this.docApi(
+	private async appendDocumentBlocks(documentId: string, children: DocBlock[]): Promise<any[]> {
+		const body = await this.docApi(
 			"POST",
 			`https://open.feishu.cn/open-apis/docx/v1/documents/${documentId}/blocks/${documentId}/children`,
 			{ children },
 		);
+		const created = body.data?.children;
+		return Array.isArray(created) ? created : [];
 	}
 
 	private async collectDocumentTextBlocks(

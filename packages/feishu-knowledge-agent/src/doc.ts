@@ -30,15 +30,24 @@ function truncate(text: string) {
 	return collapsed.length > MAX_RUN_LENGTH ? `${collapsed.slice(0, MAX_RUN_LENGTH - 1)}…` : collapsed;
 }
 
-export function buildKnowledgeBlocks(records: KnowledgeRecord[]): DocBlock[] {
+/**
+ * `imageRecords` lists the records that produced an image block, in the same order
+ * the blocks appear. The caller pairs them up to upload each cover, so the ordering
+ * must come from this traversal rather than being recomputed.
+ */
+export function buildKnowledgeBlocks(records: KnowledgeRecord[]): {
+	blocks: DocBlock[];
+	imageRecords: KnowledgeRecord[];
+} {
 	const blocks: DocBlock[] = [
 		block(BLOCK_HEADING1, "heading1", "产品资料库"),
 		block(BLOCK_TEXT, "text", summaryText(records.length)),
 	];
+	const imageRecords: KnowledgeRecord[] = [];
 
 	if (!records.length) {
 		blocks.push(block(BLOCK_TEXT, "text", "还没有收录任何资料。把链接发给 Mark 就会出现在这里。"));
-		return blocks;
+		return { blocks, imageRecords };
 	}
 
 	const byCategory = new Map<string, KnowledgeRecord[]>();
@@ -51,10 +60,11 @@ export function buildKnowledgeBlocks(records: KnowledgeRecord[]): DocBlock[] {
 		blocks.push(categoryHeadingBlock(category, categoryRecords.length));
 		for (const record of categoryRecords) {
 			blocks.push(...buildRecordBlocks(record));
+			if (coverImageUrl(record)) imageRecords.push(record);
 		}
 	}
 
-	return blocks;
+	return { blocks, imageRecords };
 }
 
 /** Blocks for a single record, used both by the full rebuild and by incremental inserts. */
