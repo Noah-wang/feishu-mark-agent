@@ -27,6 +27,41 @@ interface ProgressCardRef {
 	messageId?: string;
 }
 
+interface PendingClarification {
+	/** The message that triggered the question, so the answer can be merged back into it. */
+	originalText: string;
+	question: string;
+	expiresAt: number;
+}
+
+/**
+ * Asking a clarifying question is useless without somewhere to keep it: each Feishu
+ * event was handled independently, so the answer arrived with no idea what it
+ * answered, and Mark asked again. Held in memory because a pending question is only
+ * useful for minutes; a restart dropping it costs one repeated question.
+ */
+const pendingClarifications = new Map<string, PendingClarification>();
+const CLARIFICATION_TTL_MS = 30 * 60 * 1000;
+
+function takePendingClarification(chatId: string): PendingClarification | undefined {
+	const pending = pendingClarifications.get(chatId);
+	if (!pending) return undefined;
+	pendingClarifications.delete(chatId);
+	return pending.expiresAt > Date.now() ? pending : undefined;
+}
+
+function rememberClarification(chatId: string, originalText: string, question: string) {
+	pendingClarifications.set(chatId, {
+		originalText,
+		question,
+		expiresAt: Date.now() + CLARIFICATION_TTL_MS,
+	});
+	// Stale entries for other chats would otherwise accumulate for the process lifetime.
+	for (const [key, value] of pendingClarifications) {
+		if (value.expiresAt <= Date.now()) pendingClarifications.delete(key);
+	}
+}
+
 export function startServer(config: Config) {
 	const store = new KnowledgeStore(config);
 	const feishu = new FeishuClient(config);
@@ -83,7 +118,14 @@ async function handleMessage(
 	config: Config,
 ) {
 	const progress: ProgressCardRef = {};
-	const messageText = typeof text === "string" ? text : String(text ?? "");
+	const incomingText = typeof text === "string" ? text : String(text ?? "");
+	// A reply to a clarifying question carries no context on its own ("技术方案的建议"),
+	// so it is folded back into the request that prompted the question.
+	const pending = takePendingClarification(chatId);
+	const messageText = pending
+		? `${pending.originalText}\n\n（我问了「${pending.question}」，用户补充：${incomingText}）`
+		: incomingText;
+	if (pending) console.info(`Merged clarification answer into the original request: chat=${chatId}`);
 	try {
 		Object.assign(progress, await startProgressCard(feishu, chatId));
 		const urls = extractUrls(messageText);
@@ -95,16 +137,18 @@ async function handleMessage(
 		const agentPlan = await planAgentAction(messageText, urls, config);
 		console.info(`Planned Feishu agent action: ${agentPlan.action} reason=${agentPlan.reason}`);
 
-		if (agentPlan.action === "clarify") {
-			await finishProgressCard(
-				feishu,
-				chatId,
-				progress,
-				"需要确认一下",
-				agentPlan.question || "你想让我具体处理哪一条资料？可以发标题关键词或原链接给我。",
-				"yellow",
-			);
+		// Clarifying twice in a row is the failure the user sees: they answer, and Mark
+		// asks again. One question is the budget; after that, act on what we have.
+		if (agentPlan.action === "clarify" && !pending) {
+			const question = agentPlan.question || "你想让我具体处理哪一条资料？可以发标题关键词或原链接给我。";
+			rememberClarification(chatId, incomingText, question);
+			await finishProgressCard(feishu, chatId, progress, "需要确认一下", question, "yellow");
 			return;
+		}
+		if (agentPlan.action === "clarify") {
+			console.info("Planner asked to clarify again after an answer; answering with what we have instead");
+			agentPlan.action = "ask_question";
+			agentPlan.query = agentPlan.query || messageText;
 		}
 
 		if (agentPlan.action === "help") {
