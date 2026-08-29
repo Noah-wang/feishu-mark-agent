@@ -30,7 +30,14 @@ export interface KnowledgeRecord {
 	keyPoints: string[];
 	images: string[];
 	metadata: Record<string, unknown>;
+	/** Display label for the archive; a name once the contact scope is granted, otherwise an open_id. */
 	sharer: string;
+	/**
+	 * The archiver's open_id. Kept separate from `sharer` because that one holds a
+	 * display name once contact permission exists, and a name cannot be compared
+	 * against the sender of a delete request.
+	 */
+	sharerId: string;
 	createdAt: string;
 	rawText: string;
 }

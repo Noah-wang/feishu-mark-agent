@@ -111,7 +111,7 @@ ${urls.join("\n") || "(none)"}`;
 export async function analyzeForArchive(
 	content: ExtractedContent,
 	config: Config,
-): Promise<Omit<KnowledgeRecord, "id" | "createdAt" | "rawText" | "sharer">> {
+): Promise<Omit<KnowledgeRecord, "id" | "createdAt" | "rawText" | "sharer" | "sharerId">> {
 	const prompt = `You are organizing a company knowledge base of useful products, open-source projects, articles, and videos.
 
 Return strict JSON only. No markdown.

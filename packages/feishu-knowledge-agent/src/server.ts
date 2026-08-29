@@ -141,13 +141,40 @@ async function handleMessage(
 				);
 				return;
 			}
+			// The archive is shared, so one person must not be able to remove another's
+			// entry. Records archived before ownership was tracked have no owner to
+			// compare against and stay deletable, otherwise they could never be cleaned up.
+			const ownDeletable = candidates.filter((record) => !record.sharerId || record.sharerId === senderId);
+			const blocked = candidates.filter((record) => record.sharerId && record.sharerId !== senderId);
+			if (!ownDeletable.length) {
+				await finishProgressCard(
+					feishu,
+					chatId,
+					progress,
+					"这些资料不是你收录的",
+					`为了避免误删别人的资料，Mark 只允许删除你自己收录的内容。\n\n${renderOwnershipBlocked(blocked)}\n\n需要删除的话，请让收录的人自己操作。`,
+					"yellow",
+				);
+				return;
+			}
 			await updateProgressCard(feishu, progress, "Mark 正在更新资料库", [
 				{ label: "理解消息", state: "done" },
-				{ label: `找到 ${candidates.length} 条资料`, state: "done" },
+				{ label: `找到 ${ownDeletable.length} 条可删资料`, state: "done" },
 				{ label: "删除并同步文档", state: "active" },
 			]);
-			const deleted = await store.deleteByIds(candidates.map((record) => record.id));
-			await finishProgressCard(feishu, chatId, progress, "已删除资料", renderDeleteReply(deleted, config), "green");
+			const deleted = await store.deleteByIds(ownDeletable.map((record) => record.id));
+			await finishProgressCard(
+				feishu,
+				chatId,
+				progress,
+				"已删除资料",
+				`${renderDeleteReply(deleted, config)}${
+					blocked.length
+						? `\n\n另有 ${blocked.length} 条不是你收录的，已跳过：\n${renderOwnershipBlocked(blocked)}`
+						: ""
+				}`,
+				"green",
+			);
 			void feishu
 				.syncKnowledgeDoc(await store.list())
 				.catch((error) => console.error("Failed to sync Feishu knowledge doc after deletion", error));
@@ -293,6 +320,7 @@ async function handleMessage(
 					id: crypto.randomUUID(),
 					...analyzed,
 					sharer: sharer || senderId || "unknown",
+					sharerId: senderId,
 					createdAt: new Date().toISOString(),
 					rawText: content.text,
 				};
@@ -577,6 +605,12 @@ function knowledgeDocUrl(config: Config) {
  * grouped so it is obvious which tool covers which part of the request, and which
  * parts the archive cannot cover yet.
  */
+function renderOwnershipBlocked(records: KnowledgeRecord[]) {
+	return records
+		.map((record, index) => `${index + 1}. ${record.title}\n   收录人：${readableSharer(record.sharer)}`)
+		.join("\n");
+}
+
 function renderRecommendationReply(recommendation: Recommendation) {
 	const { answer, points } = recommendation;
 	if (!points.length) return answer;

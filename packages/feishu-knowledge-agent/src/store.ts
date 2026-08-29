@@ -232,7 +232,14 @@ function normalizeRecord(raw: Partial<KnowledgeRecord> | null | undefined): Know
 		createdAt: String(record.createdAt ?? ""),
 		rawText: String(record.rawText ?? ""),
 		sharer: String(record.sharer ?? ""),
+		// Records archived before ownership was tracked fall back to `sharer`, which held
+		// a raw open_id whenever the contact scope was missing.
+		sharerId: String(record.sharerId ?? (isOpenId(record.sharer) ? record.sharer : "")),
 	};
+}
+
+function isOpenId(value: unknown): value is string {
+	return typeof value === "string" && /^ou_[a-z0-9]+$/i.test(value.trim());
 }
 
 function stringArray(value: unknown): string[] {
