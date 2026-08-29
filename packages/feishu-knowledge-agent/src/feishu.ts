@@ -1,12 +1,29 @@
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import type { Config } from "./config.js";
 import { buildKnowledgeBlocks, type DocBlock } from "./doc.js";
-import type { IncomingMessage, KnowledgeRecord } from "./types.js";
+import type { FeishuDocumentTextBlock, IncomingMessage, KnowledgeRecord } from "./types.js";
 
 export type FeishuCard = Record<string, unknown>;
 
 /** Feishu rejects oversized child batches, so long archives are appended in slices. */
 const DOC_BLOCK_CHUNK = 40;
+const TEXT_BLOCK_KEYS: Record<number, string> = {
+	2: "text",
+	3: "heading1",
+	4: "heading2",
+	5: "heading3",
+	6: "heading4",
+	7: "heading5",
+	8: "heading6",
+	9: "heading7",
+	10: "heading8",
+	11: "heading9",
+	12: "bullet",
+	13: "ordered",
+	14: "code",
+	15: "quote",
+	19: "callout",
+};
 
 export function verifyFeishuSignature(config: Config, headers: Headers, rawBody: string): boolean {
 	if (!config.feishu.encryptKey) return true;
@@ -51,6 +68,7 @@ export function parseFeishuEvent(body: any, config: Config): { challenge?: strin
 export class FeishuClient {
 	private token = "";
 	private tokenExpiresAt = 0;
+	private readonly userNameCache = new Map<string, string>();
 	private readonly config: Config;
 
 	constructor(config: Config) {
@@ -144,11 +162,46 @@ export class FeishuClient {
 						[fields.sourceUrl]: record.url,
 						[fields.sourceType]: record.sourceType,
 						[fields.useCases]: record.useCases.join("; "),
+						[fields.sharer]: record.sharer || "-",
 						[fields.createdAt]: record.createdAt,
 					},
 				}),
 			},
 		);
+	}
+
+	async resolveUserDisplayName(openId: string): Promise<string> {
+		const userId = openId.trim();
+		if (!userId) return "";
+		const cached = this.userNameCache.get(userId);
+		if (cached) return cached;
+		if (!this.config.feishu.appId || !this.config.feishu.appSecret) return userId;
+		const token = await this.getTenantToken();
+		const params = new URLSearchParams({
+			user_id_type: "open_id",
+			department_id_type: "open_department_id",
+		});
+		const response = await fetch(
+			`https://open.feishu.cn/open-apis/contact/v3/users/${encodeURIComponent(userId)}?${params.toString()}`,
+			{
+				method: "GET",
+				headers: {
+					Authorization: `Bearer ${token}`,
+					"Content-Type": "application/json; charset=utf-8",
+				},
+			},
+		);
+		const body = (await response.json()) as any;
+		if (!response.ok || body.code !== 0) {
+			throw new Error(`Feishu contact API failed: ${JSON.stringify(body).slice(0, 400)}`);
+		}
+		const user = body.data?.user;
+		const name = [user?.name, user?.nickname, user?.en_name, user?.email].find(
+			(value) => typeof value === "string" && value.trim(),
+		);
+		const displayName = String(name || userId).trim();
+		this.userNameCache.set(userId, displayName);
+		return displayName;
 	}
 
 	/**
@@ -157,8 +210,9 @@ export class FeishuClient {
 	 * of truth and the doc is a mirror.
 	 */
 	async syncKnowledgeDoc(records: KnowledgeRecord[]): Promise<void> {
-		const documentId = this.config.feishu.docId;
-		if (!documentId || !this.config.feishu.appId) return;
+		if (!this.config.feishu.appId) return;
+		const documentId = await this.resolveConfiguredDocumentId();
+		if (!documentId) return;
 		await this.clearDocument(documentId);
 		const blocks = buildKnowledgeBlocks(records);
 		// Feishu caps how many children one call may add, and a large archive would
@@ -181,6 +235,47 @@ export class FeishuClient {
 		return documentId;
 	}
 
+	async listKnowledgeDocTextBlocks(): Promise<FeishuDocumentTextBlock[]> {
+		const documentId = await this.resolveConfiguredDocumentId();
+		if (!documentId) return [];
+		const blocks: FeishuDocumentTextBlock[] = [];
+		const visited = new Set<string>();
+		await this.collectDocumentTextBlocks(documentId, documentId, blocks, visited);
+		return blocks;
+	}
+
+	async updateKnowledgeDocTextBlock(block: FeishuDocumentTextBlock, text: string): Promise<void> {
+		const documentId = await this.resolveConfiguredDocumentId();
+		if (!documentId) return;
+		await this.docApi(
+			"PATCH",
+			`https://open.feishu.cn/open-apis/docx/v1/documents/${documentId}/blocks/${block.blockId}`,
+			{
+				update_text_elements: {
+					elements: [{ text_run: { content: text } }],
+				},
+			},
+		);
+	}
+
+	private async resolveConfiguredDocumentId(): Promise<string> {
+		if (this.config.feishu.docId) return this.config.feishu.docId;
+		if (!this.config.feishu.docUrl) return "";
+		const parsed = parseFeishuDocUrl(this.config.feishu.docUrl);
+		if (!parsed) return this.config.feishu.docUrl;
+		if (parsed.type === "docx") return parsed.token;
+		const body = await this.docApi(
+			"GET",
+			`https://open.feishu.cn/open-apis/wiki/v2/spaces/get_node?token=${encodeURIComponent(parsed.token)}`,
+		);
+		const node = body.data?.node;
+		if (!node?.obj_token) throw new Error(`Failed to resolve Feishu wiki node: ${JSON.stringify(body).slice(0, 400)}`);
+		if (node.obj_type && node.obj_type !== "docx") {
+			throw new Error(`Configured Feishu wiki node is ${node.obj_type}, but Mark can only sync docx pages.`);
+		}
+		return node.obj_token;
+	}
+
 	/**
 	 * The batch_delete range is cleared and re-read until the document is empty, because
 	 * whether `end_index` is inclusive is not something we could confirm from the docs.
@@ -199,12 +294,7 @@ export class FeishuClient {
 	}
 
 	private async countDocumentChildren(documentId: string): Promise<number> {
-		const body = await this.docApi(
-			"GET",
-			`https://open.feishu.cn/open-apis/docx/v1/documents/${documentId}/blocks/${documentId}/children?page_size=500`,
-		);
-		const items = body.data?.items;
-		return Array.isArray(items) ? items.length : 0;
+		return (await this.listDocumentChildren(documentId, documentId)).length;
 	}
 
 	private async appendDocumentBlocks(documentId: string, children: DocBlock[]): Promise<void> {
@@ -213,6 +303,44 @@ export class FeishuClient {
 			`https://open.feishu.cn/open-apis/docx/v1/documents/${documentId}/blocks/${documentId}/children`,
 			{ children },
 		);
+	}
+
+	private async collectDocumentTextBlocks(
+		documentId: string,
+		parentBlockId: string,
+		blocks: FeishuDocumentTextBlock[],
+		visited: Set<string>,
+	): Promise<void> {
+		if (visited.has(parentBlockId) || visited.size > 1000) return;
+		visited.add(parentBlockId);
+		const children = await this.listDocumentChildren(documentId, parentBlockId);
+		for (const child of children) {
+			const blockId = child.block_id;
+			if (!blockId) continue;
+			const text = extractBlockText(child);
+			if (text) {
+				blocks.push({ blockId, blockType: Number(child.block_type), text });
+			}
+			await this.collectDocumentTextBlocks(documentId, blockId, blocks, visited);
+		}
+	}
+
+	private async listDocumentChildren(documentId: string, blockId: string): Promise<any[]> {
+		const items: any[] = [];
+		let pageToken = "";
+		for (let page = 0; page < 20; page += 1) {
+			const params = new URLSearchParams({ page_size: "500" });
+			if (pageToken) params.set("page_token", pageToken);
+			const body = await this.docApi(
+				"GET",
+				`https://open.feishu.cn/open-apis/docx/v1/documents/${documentId}/blocks/${blockId}/children?${params.toString()}`,
+			);
+			const pageItems = body.data?.items;
+			if (Array.isArray(pageItems)) items.push(...pageItems);
+			if (!body.data?.has_more || !body.data?.page_token) break;
+			pageToken = body.data.page_token;
+		}
+		return items;
 	}
 
 	private async docApi(method: string, url: string, payload?: unknown): Promise<any> {
@@ -251,18 +379,57 @@ export class FeishuClient {
 	}
 }
 
-function parseMessageText(content: string | undefined) {
+function extractBlockText(block: any): string {
+	const key = TEXT_BLOCK_KEYS[Number(block?.block_type)];
+	const elements = key ? block?.[key]?.elements : undefined;
+	if (!Array.isArray(elements)) return "";
+	return elements
+		.map((element) => element?.text_run?.content ?? element?.mention_user?.name ?? element?.mention_doc?.title ?? "")
+		.join("")
+		.trim();
+}
+
+function parseMessageText(content: string | undefined): string {
 	if (!content) return "";
 	try {
 		const parsed = JSON.parse(content);
-		return parsed.text ?? parsed.content ?? "";
+		return extractMessageText(parsed);
 	} catch {
-		return content;
+		return String(content);
 	}
+}
+
+function extractMessageText(value: unknown): string {
+	if (value === undefined || value === null) return "";
+	if (typeof value === "string") return value;
+	if (typeof value === "number" || typeof value === "boolean") return String(value);
+	if (Array.isArray(value)) return value.map(extractMessageText).filter(Boolean).join("\n");
+	if (typeof value !== "object") return "";
+
+	const object = value as Record<string, unknown>;
+	const parts: string[] = [];
+	for (const key of ["text", "title", "content", "href", "name"]) {
+		const text = extractMessageText(object[key]);
+		if (text) parts.push(text);
+	}
+	return [...new Set(parts)].join("\n").trim();
 }
 
 function safeEqual(a: string, b: string) {
 	const left = Buffer.from(a);
 	const right = Buffer.from(b);
 	return left.length === right.length && timingSafeEqual(left, right);
+}
+
+function parseFeishuDocUrl(input: string): { type: "docx" | "wiki"; token: string } | undefined {
+	try {
+		const url = new URL(input);
+		const match = url.pathname.match(/\/(docx|wiki)\/([^/?#]+)/);
+		if (!match) return undefined;
+		return { type: match[1] as "docx" | "wiki", token: decodeURIComponent(match[2]) };
+	} catch {
+		const match = input.match(/\/(docx|wiki)\/([^/?#]+)/);
+		if (!match) return undefined;
+		return { type: match[1] as "docx" | "wiki", token: decodeURIComponent(match[2]) };
+	}
 }

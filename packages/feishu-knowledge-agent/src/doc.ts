@@ -59,6 +59,7 @@ export function buildKnowledgeBlocks(records: KnowledgeRecord[]): DocBlock[] {
 				record.tags.length ? record.tags.join("、") : undefined,
 			].filter(Boolean);
 			blocks.push(block(BLOCK_TEXT, "text", facts.join(" · ")));
+			blocks.push(block(BLOCK_TEXT, "text", `分享者：${readableSharer(record.sharer)}`));
 			blocks.push(block(BLOCK_TEXT, "text", record.url));
 			if (record.summary) blocks.push(block(BLOCK_TEXT, "text", record.summary));
 			if (record.useCases.length) {
@@ -71,4 +72,10 @@ export function buildKnowledgeBlocks(records: KnowledgeRecord[]): DocBlock[] {
 	}
 
 	return blocks;
+}
+
+function readableSharer(sharer: string) {
+	const value = sharer.trim();
+	if (!value || value === "unknown" || /^ou_[a-z0-9]+$/i.test(value)) return "飞书用户";
+	return value;
 }

@@ -30,8 +30,15 @@ export interface KnowledgeRecord {
 	keyPoints: string[];
 	images: string[];
 	metadata: Record<string, unknown>;
+	sharer: string;
 	createdAt: string;
 	rawText: string;
+}
+
+export interface FeishuDocumentTextBlock {
+	blockId: string;
+	blockType: number;
+	text: string;
 }
 
 export interface Recommendation {
@@ -44,12 +51,27 @@ export interface Recommendation {
 	}>;
 }
 
-export type MessageIntentName = "archive_links" | "ask_question" | "list_records" | "server_status" | "help";
+export type MessageIntentName =
+	| "archive_links"
+	| "ask_question"
+	| "list_records"
+	| "delete_records"
+	| "server_status"
+	| "help";
+
+export type AgentActionName = MessageIntentName | "translate_records" | "clarify";
 
 export interface MessageIntent {
 	intent: MessageIntentName;
 	query: string;
 	reason: string;
+}
+
+export interface AgentPlan {
+	action: AgentActionName;
+	query: string;
+	reason: string;
+	question?: string;
 }
 
 export interface IncomingMessage {

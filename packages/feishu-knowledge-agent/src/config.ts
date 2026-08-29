@@ -22,6 +22,7 @@ export interface Config {
 		bitableAppToken: string;
 		bitableTableId: string;
 		docId: string;
+		docUrl: string;
 		docFolderToken: string;
 		fields: Record<string, string>;
 	};
@@ -84,6 +85,7 @@ export async function loadConfig(): Promise<Config> {
 			bitableAppToken: env("FEISHU_BITABLE_APP_TOKEN"),
 			bitableTableId: env("FEISHU_BITABLE_TABLE_ID"),
 			docId: env("FEISHU_DOC_ID"),
+			docUrl: env("FEISHU_DOC_URL"),
 			docFolderToken: env("FEISHU_DOC_FOLDER_TOKEN"),
 			fields: {
 				title: env("FEISHU_FIELD_TITLE", "Title"),
@@ -93,6 +95,7 @@ export async function loadConfig(): Promise<Config> {
 				sourceUrl: env("FEISHU_FIELD_SOURCE_URL", "Source URL"),
 				sourceType: env("FEISHU_FIELD_SOURCE_TYPE", "Source Type"),
 				useCases: env("FEISHU_FIELD_USE_CASES", "Use Cases"),
+				sharer: env("FEISHU_FIELD_SHARER", "Sharer"),
 				createdAt: env("FEISHU_FIELD_CREATED_AT", "Created At"),
 			},
 		},

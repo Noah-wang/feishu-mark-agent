@@ -128,14 +128,31 @@ Create the doc once:
 npm --workspace=@noah/feishu-knowledge-agent run doc:create
 ```
 
-Put the printed id in `FEISHU_DOC_ID`. A doc created with `tenant_access_token` is
-only visible to the app itself, so open it in Feishu once and add yourself or a group
-as a collaborator.
+Put the printed id in `FEISHU_DOC_ID`. You can also paste a full docx or Wiki URL into
+`FEISHU_DOC_URL`; Mark will keep that browsable URL in chat replies and resolve the
+real document id internally when syncing.
+
+A doc created with `tenant_access_token` is only visible to the app itself, so open it
+in Feishu once and add yourself or a group as a collaborator.
 
 After every archive the doc is rebuilt from `records.json`, so it never drifts from the
-store. The sync runs after the result card is sent and only logs on failure: the local
-store is the source of truth and a doc problem must not make a successful archive look
-failed. Archive, list, and help replies link to the doc when `FEISHU_DOC_ID` is set.
+store. The sync also runs after deletions. Mark understands deletion requests such as
+`删除 + 原链接` or `去掉某某项目`; if too many similar records match, it asks for a more
+specific title or link before deleting. The sync runs after the result card is sent and
+only logs on failure: the local store is the source of truth and a doc problem must not
+make a successful archive or deletion look failed. Archive, delete, list, and help
+replies link to the doc when `FEISHU_DOC_ID` or `FEISHU_DOC_URL` is set.
+
+Each new record also stores `sharer`, the Feishu sender id of the person who sent the
+link to Mark. This is shown in chat replies, the local markdown mirror, the Feishu doc,
+and the optional Bitable field configured by `FEISHU_FIELD_SHARER`.
+
+Mark tries to resolve that Feishu sender id into a readable display name before saving
+the record. This uses Feishu Contact API `contact/v3/users/{user_id}` with
+`user_id_type=open_id`, which requires one of Feishu's contact read scopes such as
+`contact:contact.base:readonly`. If that scope is missing, Mark falls back to a generic
+`飞书用户` label in human-facing replies and documents instead of showing a raw `ou_...`
+id.
 
 
 ## Local Knowledge Files
@@ -146,6 +163,21 @@ By default the service writes:
 - `.knowledge/knowledge.md`
 
 These files are the local fallback knowledge base. Bitable and a vector database can be added without changing the Feishu interaction contract.
+
+## Agent Behavior
+
+Mark now plans before it acts. Each Feishu message is first turned into an agent action
+such as archiving links, answering from saved records, deleting records, translating
+English records to Chinese, checking servers, or asking a clarifying question.
+
+This makes document-cleanup requests work more naturally. For example, a message like
+`文档里面有一个是英文的，帮我改成中文的` is treated as a knowledge-document cleanup task:
+Mark first reads the configured Feishu Wiki/docx page, finds English-heavy text blocks,
+rewrites those blocks in Chinese, and writes them back to the same document. If the
+document cannot be read or has no obvious English block, Mark falls back to saved
+records: it rewrites English-heavy title, summary, category, tags, use cases, and key
+points, then syncs the Feishu doc mirror. If too many records match, Mark asks the user
+to choose instead of editing blindly.
 
 ## Server Monitoring
 

@@ -26,8 +26,7 @@ export class KnowledgeStore {
 		const existingIndex = records.findIndex((item) => item.url === record.url);
 		if (existingIndex >= 0) records[existingIndex] = record;
 		else records.unshift(record);
-		await writeFile(this.recordsPath, JSON.stringify(records, null, 2), "utf8");
-		await writeFile(this.docPath, renderMarkdown(records), "utf8");
+		await this.writeRecords(records);
 	}
 
 	async search(query: string, limit = 8): Promise<KnowledgeRecord[]> {
@@ -44,6 +43,33 @@ export class KnowledgeStore {
 			.filter((item) => item.score >= cutoff)
 			.slice(0, limit)
 			.map((item) => item.record);
+	}
+
+	async findForDeletion(query: string, urls: string[], limit = 8): Promise<KnowledgeRecord[]> {
+		const records = await this.list();
+		if (!records.length) return [];
+		const normalizedUrls = new Set(urls.map(normalizeUrlForMatch));
+		if (normalizedUrls.size) {
+			return records
+				.filter((record) => normalizedUrls.has(normalizeUrlForMatch(record.url)))
+				.slice(0, limit);
+		}
+		return this.search(stripDeleteWords(query), limit);
+	}
+
+	async deleteByIds(ids: string[]): Promise<KnowledgeRecord[]> {
+		if (!ids.length) return [];
+		const idSet = new Set(ids);
+		const records = await this.list();
+		const deleted = records.filter((record) => idSet.has(record.id));
+		if (!deleted.length) return [];
+		await this.writeRecords(records.filter((record) => !idSet.has(record.id)));
+		return deleted;
+	}
+
+	private async writeRecords(records: KnowledgeRecord[]): Promise<void> {
+		await writeFile(this.recordsPath, JSON.stringify(records, null, 2), "utf8");
+		await writeFile(this.docPath, renderMarkdown(records), "utf8");
 	}
 }
 
@@ -144,6 +170,17 @@ function scoreRecord(record: KnowledgeRecord, terms: string[]) {
 	return score;
 }
 
+function stripDeleteWords(text: string) {
+	return text
+		.replace(/(帮我|请|把|这个|那个|一篇|文章|资料|记录|知识库|资料库)/g, " ")
+		.replace(/(删除|删掉|去掉|移除|清除|取消收录|不要收录|delete|remove|clear)/gi, " ")
+		.trim();
+}
+
+function normalizeUrlForMatch(url: string) {
+	return url.trim().replace(/\/+$/, "");
+}
+
 function renderMarkdown(records: KnowledgeRecord[]) {
 	const byCategory = new Map<string, KnowledgeRecord[]>();
 	for (const record of records) {
@@ -159,6 +196,7 @@ function renderMarkdown(records: KnowledgeRecord[]) {
 			lines.push(`- 原链接：${record.url}`);
 			lines.push(`- 来源类型：${SOURCE_TYPE_LABELS[record.sourceType] ?? record.sourceType}`);
 			lines.push(`- 标签：${record.tags.join("、") || "-"}`);
+			lines.push(`- 分享者：${readableSharer(record.sharer)}`);
 			lines.push(`- 适用场景：${record.useCases.join("；") || "-"}`);
 			lines.push(`- 摘要：${record.summary}`);
 			if (record.images.length) lines.push(`- 图片：${record.images.join(", ")}`);
@@ -170,4 +208,10 @@ function renderMarkdown(records: KnowledgeRecord[]) {
 		}
 	}
 	return `${lines.join("\n")}\n`;
+}
+
+function readableSharer(sharer: string) {
+	const value = sharer.trim();
+	if (!value || value === "unknown" || /^ou_[a-z0-9]+$/i.test(value)) return "飞书用户";
+	return value;
 }
