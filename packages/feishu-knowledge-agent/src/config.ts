@@ -71,7 +71,12 @@ function envInt(name: string, fallback: number) {
 
 export async function loadConfig(): Promise<Config> {
 	loadDotEnv(resolve(PACKAGE_DIR, ".env"));
-	const dataDir = resolve(env("KNOWLEDGE_DATA_DIR", ".knowledge"));
+	// Resolved against the package rather than the working directory. `resolve` on a bare
+	// relative path uses process.cwd(), which differs between `npm --workspace`, a bare
+	// `node dist/index.js`, and pm2, so the archive location drifted with the launch
+	// method — on the server that produced five nested `.knowledge` directories. An
+	// absolute KNOWLEDGE_DATA_DIR still wins, because resolve returns it unchanged.
+	const dataDir = resolve(PACKAGE_DIR, env("KNOWLEDGE_DATA_DIR", ".knowledge"));
 	await mkdir(dataDir, { recursive: true });
 
 	return {
