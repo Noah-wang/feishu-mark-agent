@@ -15,7 +15,8 @@ export class KnowledgeStore {
 
 	async list(): Promise<KnowledgeRecord[]> {
 		try {
-			return JSON.parse(await readFile(this.recordsPath, "utf8"));
+			const parsed = JSON.parse(await readFile(this.recordsPath, "utf8"));
+			return Array.isArray(parsed) ? parsed.map(normalizeRecord) : [];
 		} catch {
 			return [];
 		}
@@ -206,6 +207,36 @@ function renderMarkdown(records: KnowledgeRecord[]) {
 		}
 	}
 	return `${lines.join("\n")}\n`;
+}
+
+/**
+ * Records written before a field existed do not carry it, and `JSON.parse` returns
+ * `any`, so the compiler cannot catch the gap. `sharer` was added after the first
+ * records were archived, and every render then crashed on `sharer.trim()`.
+ * Normalising here keeps that whole class of bug away from the rest of the code.
+ */
+function normalizeRecord(raw: Partial<KnowledgeRecord> | null | undefined): KnowledgeRecord {
+	const record = raw ?? {};
+	return {
+		id: String(record.id ?? ""),
+		url: String(record.url ?? ""),
+		sourceType: record.sourceType ?? "unknown",
+		title: String(record.title ?? ""),
+		summary: String(record.summary ?? ""),
+		category: String(record.category ?? "未分类"),
+		tags: stringArray(record.tags),
+		useCases: stringArray(record.useCases),
+		keyPoints: stringArray(record.keyPoints),
+		images: stringArray(record.images),
+		metadata: typeof record.metadata === "object" && record.metadata ? record.metadata : {},
+		createdAt: String(record.createdAt ?? ""),
+		rawText: String(record.rawText ?? ""),
+		sharer: String(record.sharer ?? ""),
+	};
+}
+
+function stringArray(value: unknown): string[] {
+	return Array.isArray(value) ? value.map((item) => String(item)).filter(Boolean) : [];
 }
 
 function readableSharer(sharer: string) {
