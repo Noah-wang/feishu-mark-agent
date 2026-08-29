@@ -41,14 +41,30 @@ export interface FeishuDocumentTextBlock {
 	text: string;
 }
 
-export interface Recommendation {
-	answer: string;
-	candidates: Array<{
-		id: string;
+/**
+ * One capability a request needs. "我要做个产品，要能读 B 站视频内容再自动整理" is
+ * two of these, and each is searched separately so one point cannot crowd the
+ * other out of a single ranked result list.
+ */
+export interface RequirementPoint {
+	need: string;
+	keywords: string;
+}
+
+export interface SolutionPoint {
+	need: string;
+	picks: Array<{
 		title: string;
 		url: string;
 		reason: string;
 	}>;
+	/** What the archive lacks for this point. Empty when it is covered. */
+	gap: string;
+}
+
+export interface Recommendation {
+	answer: string;
+	points: SolutionPoint[];
 }
 
 export type MessageIntentName =
@@ -80,4 +96,14 @@ export interface IncomingMessage {
 	senderId: string;
 	text: string;
 	mentionsBot: boolean;
+}
+
+/**
+ * Feishu only gives an open_id until the contact scope is granted, so fall back to a
+ * generic label rather than showing a raw `ou_...` identifier in the archive.
+ */
+export function readableSharer(sharer: string | undefined): string {
+	const value = (sharer ?? "").trim();
+	if (!value || value === "unknown" || /^ou_[a-z0-9]+$/i.test(value)) return "飞书用户";
+	return value;
 }

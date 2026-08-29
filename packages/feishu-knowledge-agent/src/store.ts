@@ -2,7 +2,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Config } from "./config.js";
 import type { KnowledgeRecord } from "./types.js";
-import { SOURCE_TYPE_LABELS } from "./types.js";
+import { readableSharer, SOURCE_TYPE_LABELS } from "./types.js";
 
 export class KnowledgeStore {
 	private readonly recordsPath: string;
@@ -237,10 +237,4 @@ function normalizeRecord(raw: Partial<KnowledgeRecord> | null | undefined): Know
 
 function stringArray(value: unknown): string[] {
 	return Array.isArray(value) ? value.map((item) => String(item)).filter(Boolean) : [];
-}
-
-function readableSharer(sharer: string) {
-	const value = sharer.trim();
-	if (!value || value === "unknown" || /^ou_[a-z0-9]+$/i.test(value)) return "飞书用户";
-	return value;
 }

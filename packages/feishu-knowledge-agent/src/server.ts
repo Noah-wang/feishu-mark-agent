@@ -3,6 +3,7 @@ import {
 	analyzeForArchive,
 	answerQuestion,
 	planAgentAction,
+	planRequirementPoints,
 	translateRecordToChinese,
 	translateTextToChinese,
 } from "./analyzer.js";
@@ -11,7 +12,8 @@ import { extractContent } from "./extractors.js";
 import { type FeishuCard, FeishuClient, parseFeishuEvent, verifyFeishuSignature } from "./feishu.js";
 import { collectServerStatus, renderServerStatusReport } from "./serverStatus.js";
 import { KnowledgeStore } from "./store.js";
-import type { FeishuDocumentTextBlock, KnowledgeRecord } from "./types.js";
+import type { FeishuDocumentTextBlock, KnowledgeRecord, Recommendation, RequirementPoint } from "./types.js";
+import { readableSharer } from "./types.js";
 import { extractUrls } from "./url.js";
 
 type ProgressState = "pending" | "active" | "done";
@@ -307,24 +309,40 @@ async function handleMessage(
 			return;
 		}
 
-		await updateProgressCard(feishu, progress, "Mark 正在检索和分析", [
+		const question = agentPlan.query || messageText;
+		await updateProgressCard(feishu, progress, "Mark 正在拆解需求", [
 			{ label: "理解消息", state: "done" },
-			{ label: "检索资料库", state: "active" },
-			{ label: "生成建议", state: "pending" },
+			{ label: "拆解能力点", state: "active" },
+			{ label: "逐点检索", state: "pending" },
+			{ label: "生成方案", state: "pending" },
 		]);
-		const candidates = await store.search(agentPlan.query || messageText, 8);
-		await updateProgressCard(feishu, progress, "Mark 正在生成推荐", [
+		const requirementPoints = await planRequirementPoints(question, config);
+		// Each point is searched on its own so a broad point cannot crowd a narrow one
+		// out of a single ranked list.
+		const searched: Array<{ point: RequirementPoint; records: KnowledgeRecord[] }> = [];
+		for (const [index, point] of requirementPoints.entries()) {
+			await updateProgressCard(feishu, progress, `Mark 正在检索：${point.need}`, [
+				{ label: "理解消息", state: "done" },
+				{ label: `拆解出 ${requirementPoints.length} 个能力点`, state: "done" },
+				{ label: `逐点检索 ${index + 1}/${requirementPoints.length}`, state: "active" },
+				{ label: "生成方案", state: "pending" },
+			]);
+			searched.push({ point, records: await store.search(point.keywords || question, 5) });
+		}
+		const covered = searched.filter((entry) => entry.records.length).length;
+		await updateProgressCard(feishu, progress, "Mark 正在生成方案", [
 			{ label: "理解消息", state: "done" },
-			{ label: `找到 ${candidates.length} 条相关资料`, state: "done" },
-			{ label: "生成建议", state: "active" },
+			{ label: `拆解出 ${requirementPoints.length} 个能力点`, state: "done" },
+			{ label: `${covered}/${requirementPoints.length} 个点找到资料`, state: "done" },
+			{ label: "生成方案", state: "active" },
 		]);
-		const recommendation = await answerQuestion(agentPlan.query || messageText, candidates, config);
+		const recommendation = await answerQuestion(question, searched, config);
 		await finishProgressCard(
 			feishu,
 			chatId,
 			progress,
-			"推荐结果",
-			renderRecommendationReply(recommendation.answer, recommendation.candidates),
+			requirementPoints.length > 1 ? "方案建议" : "推荐结果",
+			renderRecommendationReply(recommendation),
 			"purple",
 		);
 	} catch (error) {
@@ -554,11 +572,40 @@ function knowledgeDocUrl(config: Config) {
 	return config.feishu.docUrl || (config.feishu.docId ? `https://feishu.cn/docx/${config.feishu.docId}` : "");
 }
 
-function renderRecommendationReply(answer: string, candidates: Array<{ title: string; url: string; reason: string }>) {
-	const sources = candidates
-		.map((item, index) => `${index + 1}. ${item.title}\n${item.url}\n${item.reason}`)
+/**
+ * A single-point answer reads like the old flat recommendation; a multi-point one is
+ * grouped so it is obvious which tool covers which part of the request, and which
+ * parts the archive cannot cover yet.
+ */
+function renderRecommendationReply(recommendation: Recommendation) {
+	const { answer, points } = recommendation;
+	if (!points.length) return answer;
+
+	if (points.length === 1) {
+		const only = points[0];
+		const picks = only.picks
+			.map((pick, index) => `${index + 1}. ${pick.title}\n${pick.url}\n${pick.reason}`)
+			.join("\n\n");
+		const gap = only.gap ? `\n\n还缺：${only.gap}` : "";
+		return picks ? `${answer}\n\n参考资料：\n${picks}${gap}` : `${answer}${gap}`;
+	}
+
+	const sections = points
+		.map((point, index) => {
+			const header = `${index + 1}. ${point.need}`;
+			if (!point.picks.length) {
+				return `${header}\n   暂无合适资料${point.gap ? `\n   缺口：${point.gap}` : ""}`;
+			}
+			const picks = point.picks
+				.map((pick) => `   · ${pick.title}\n     ${pick.url}\n     ${pick.reason}`)
+				.join("\n");
+			return `${header}\n${picks}${point.gap ? `\n   缺口：${point.gap}` : ""}`;
+		})
 		.join("\n\n");
-	return sources ? `${answer}\n\n参考资料：\n${sources}` : answer;
+
+	const missing = points.filter((point) => !point.picks.length).length;
+	const footer = missing ? `\n\n有 ${missing} 个点资料库还没覆盖，把相关链接发给我收录后可以再问一次。` : "";
+	return `${answer}\n\n按能力点拆解：\n\n${sections}${footer}`;
 }
 
 function renderListReply(records: KnowledgeRecord[], config: Config) {
@@ -593,12 +640,6 @@ function renderDeletionCandidates(records: KnowledgeRecord[]) {
 		.slice(0, 8)
 		.map((record, index) => `${index + 1}. ${record.title}\n${record.url}`)
 		.join("\n\n");
-}
-
-function readableSharer(sharer: string) {
-	const value = sharer.trim();
-	if (!value || value === "unknown" || /^ou_[a-z0-9]+$/i.test(value)) return "飞书用户";
-	return value;
 }
 
 function renderHelpReply(config: Config) {

@@ -7,7 +7,7 @@
  */
 
 import type { KnowledgeRecord } from "./types.js";
-import { SOURCE_TYPE_LABELS } from "./types.js";
+import { readableSharer, SOURCE_TYPE_LABELS } from "./types.js";
 
 export type DocBlock = Record<string, unknown>;
 
@@ -112,10 +112,4 @@ export function parseCategoryHeading(text: string): { category: string; count: n
 
 export function summaryText(total: number) {
 	return `共 ${total} 条 · 更新于 ${new Date().toLocaleString("zh-CN", { hour12: false })}`;
-}
-
-function readableSharer(sharer: string) {
-	const value = sharer.trim();
-	if (!value || value === "unknown" || /^ou_[a-z0-9]+$/i.test(value)) return "飞书用户";
-	return value;
 }

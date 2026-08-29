@@ -8,6 +8,7 @@ import type {
 	MessageIntent,
 	MessageIntentName,
 	Recommendation,
+	RequirementPoint,
 } from "./types.js";
 import { SOURCE_TYPE_LABELS } from "./types.js";
 
@@ -164,60 +165,154 @@ ${content.text.slice(0, 24000)}`;
 	};
 }
 
-export async function answerQuestion(
-	question: string,
-	records: KnowledgeRecord[],
-	config: Config,
-): Promise<Recommendation> {
-	const context = records
-		.map(
-			(record, index) => `#${index + 1}
-Title: ${record.title}
-URL: ${record.url}
-Category: ${record.category}
-Tags: ${record.tags.join(", ")}
-Summary: ${record.summary}
-Use cases: ${record.useCases.join("; ")}
-Key points: ${record.keyPoints.join("; ")}`,
-		)
-		.join("\n\n");
-	const prompt = `You are a Feishu knowledge-base assistant. Answer the user's product/service recommendation question in Chinese.
+/** Capping this bounds both the number of searches and the size of the answer prompt. */
+const MAX_REQUIREMENT_POINTS = 5;
 
-Use only the provided collected records. If the records are insufficient, say what is missing.
+/**
+ * Splits a request into the capabilities it needs, so each can be searched on its own.
+ * A single-tool question yields one point and behaves exactly like a plain search.
+ */
+export async function planRequirementPoints(question: string, config: Config): Promise<RequirementPoint[]> {
+	const prompt = `You are planning how to answer a request against a knowledge base of products, open-source projects, articles, and videos.
+
+Break the request into the distinct capabilities it needs. Each capability is something a
+separate tool or project could provide.
+
+Rules:
+- A request naming one tool need yields exactly one point. Do not invent extra points.
+- A product idea usually yields two to four points. Never more than ${MAX_REQUIREMENT_POINTS}.
+- "need" is a short Chinese phrase naming the capability, not a restatement of the whole request.
+- "keywords" are Chinese and English search terms for that capability, space separated, no punctuation.
+- Return points in the order they would be built.
+
 Return strict JSON only:
 {
-  "answer": "中文推荐结论，包含取舍和下一步建议",
-  "candidates": [{"id": "record id or index", "title": "中文标题", "url": "url", "reason": "中文推荐理由"}]
+  "points": [{"need": "中文能力点", "keywords": "关键词 keywords"}]
 }
 
+Request:
+${question}`;
+
+	const result = await runLlmJson(prompt, config).catch(() => undefined);
+	const points = Array.isArray(result?.points) ? result.points : [];
+	const cleaned = points
+		.map((point: any) => ({
+			need: String(point?.need ?? "").trim(),
+			keywords: String(point?.keywords ?? "").trim(),
+		}))
+		.filter((point: RequirementPoint) => point.need && point.keywords)
+		.slice(0, MAX_REQUIREMENT_POINTS);
+	// Without an LLM the whole question is one point, which is the old behaviour.
+	return cleaned.length ? cleaned : [{ need: question.trim() || "需求", keywords: question.trim() }];
+}
+
+export async function answerQuestion(
+	question: string,
+	points: Array<{ point: RequirementPoint; records: KnowledgeRecord[] }>,
+	config: Config,
+): Promise<Recommendation> {
+	const context = points
+		.map(
+			(entry, pointIndex) => `能力点 ${pointIndex + 1}：${entry.point.need}
+${
+	entry.records.length
+		? entry.records
+				.map(
+					(record, index) => `  #${pointIndex + 1}.${index + 1}
+  Title: ${record.title}
+  URL: ${record.url}
+  Category: ${record.category}
+  Tags: ${record.tags.join(", ")}
+  Summary: ${record.summary}
+  Use cases: ${record.useCases.join("; ")}
+  Key points: ${record.keyPoints.join("; ")}`,
+				)
+				.join("\n\n")
+		: "  （资料库里没有检索到相关记录）"
+}`,
+		)
+		.join("\n\n");
+
+	const prompt = `You are a Feishu knowledge-base assistant. The user described something they want to build.
+Their request was split into capability points, and each point was searched separately.
+
+For every point, pick the collected records that actually help with that point, and say why.
+Answer in Simplified Chinese.
+
+Rules:
+- Use only the provided records. Never invent a tool that is not listed.
+- A record may serve more than one point. A point may have no suitable record.
+- When a point has nothing suitable, leave "picks" empty and write in "gap" what kind of tool
+  the archive is missing, so the user knows what to go collect.
+- When a point is covered, "gap" is an empty string.
+- Keep the points in the given order and do not merge or drop any.
+- "answer" is a short overall conclusion: what can be built now, and what is blocked.
+
 Language rules:
-- "answer", "title", and "reason" must be Simplified Chinese, even when the underlying records are in English.
-- Only keep original spelling for product names, repo names, and technical terms like API, SDK, LLM.
+- "answer", "need", "title", "reason", and "gap" must be Simplified Chinese.
+- Keep product names, repo names, and terms like API, SDK, LLM in their original spelling.
 - "url" stays exactly as given.
 
-Question:
+Return strict JSON only:
+{
+  "answer": "中文总体结论",
+  "points": [
+    {
+      "need": "中文能力点",
+      "picks": [{"title": "中文标题", "url": "url", "reason": "中文推荐理由"}],
+      "gap": "中文缺口说明，覆盖到了就留空字符串"
+    }
+  ]
+}
+
+Request:
 ${question}
 
-Collected records:
+Capability points and their search results:
 ${context.slice(0, 30000)}`;
+
 	const result = await runLlmJson(prompt, config)
 		.catch(() => runPiJson(prompt, config))
 		.catch(() => undefined);
-	if (result?.answer) {
+
+	const parsed = Array.isArray(result?.points) ? result.points : [];
+	if (result?.answer && parsed.length) {
 		return {
 			answer: String(result.answer),
-			candidates: Array.isArray(result.candidates) ? result.candidates : [],
+			points: parsed.map((item: any, index: number) => ({
+				need: String(item?.need ?? points[index]?.point.need ?? "").trim(),
+				picks: Array.isArray(item?.picks)
+					? item.picks.map((pick: any) => ({
+							title: String(pick?.title ?? ""),
+							url: String(pick?.url ?? ""),
+							reason: String(pick?.reason ?? ""),
+						}))
+					: [],
+				gap: String(item?.gap ?? "").trim(),
+			})),
 		};
 	}
+
+	return heuristicRecommendation(points);
+}
+
+/** Used when no LLM is reachable: report the top search hit per point without analysis. */
+function heuristicRecommendation(
+	points: Array<{ point: RequirementPoint; records: KnowledgeRecord[] }>,
+): Recommendation {
+	const covered = points.filter((entry) => entry.records.length).length;
 	return {
-		answer: records.length
-			? `我找到了 ${records.length} 条相关资料。最相关的是「${records[0].title}」：${records[0].summary}`
-			: "目前资料库里还没有足够相关的内容。你可以先私聊发一些链接给机器人收录。",
-		candidates: records.slice(0, 5).map((record) => ({
-			id: record.id,
-			title: record.title,
-			url: record.url,
-			reason: record.summary,
+		answer: covered
+			? `我按 ${points.length} 个能力点检索了资料库，其中 ${covered} 个找到了相关资料。下面是每个点最相关的记录。`
+			: "目前资料库里还没有能覆盖这个需求的内容。你可以先把相关的链接发给我收录。",
+		points: points.map((entry) => ({
+			need: entry.point.need,
+			picks: entry.records.slice(0, 3).map((record) => ({
+				title: record.title,
+				url: record.url,
+				reason: record.summary,
+			})),
+			gap: entry.records.length ? "" : "资料库里没有检索到能覆盖这一点的记录。",
 		})),
 	};
 }
