@@ -1,0 +1,23 @@
+{
+	"name": "@noah/feishu-knowledge-agent",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"description": "Feishu bot backend for collecting product links and answering against the collected knowledge base.",
+	"main": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"scripts": {
+		"build": "tsc -p tsconfig.build.json",
+		"dev": "tsx src/index.ts",
+		"start": "node dist/index.js",
+		"doc:create": "tsx src/create-doc.ts"
+	},
+	"engines": {
+		"node": ">=22.19.0"
+	},
+	"devDependencies": {
+		"@types/node": "22.19.19",
+		"tsx": "4.22.1",
+		"typescript": "5.9.3"
+	}
+}
