@@ -34,6 +34,18 @@ interface PendingClarification {
 	expiresAt: number;
 }
 
+interface ScheduledArchiveReminder {
+	id: string;
+	records: KnowledgeRecord[];
+	sourceChatId: string;
+	targetChatId: string;
+	senderId: string;
+	createdAt: number;
+	sendAt: number;
+	cancelUntil: number;
+	timer: ReturnType<typeof setTimeout>;
+}
+
 /**
  * Asking a clarifying question is useless without somewhere to keep it: each Feishu
  * event was handled independently, so the answer arrived with no idea what it
@@ -42,6 +54,7 @@ interface PendingClarification {
  */
 const pendingClarifications = new Map<string, PendingClarification>();
 const CLARIFICATION_TTL_MS = 30 * 60 * 1000;
+const scheduledArchiveReminders = new Map<string, ScheduledArchiveReminder>();
 
 function takePendingClarification(chatId: string): PendingClarification | undefined {
 	const pending = pendingClarifications.get(chatId);
@@ -119,6 +132,10 @@ async function handleMessage(
 ) {
 	const progress: ProgressCardRef = {};
 	const incomingText = typeof text === "string" ? text : String(text ?? "");
+	if (isArchiveReminderCancelText(incomingText)) {
+		await cancelLatestArchiveReminder(chatId, senderId, feishu);
+		return;
+	}
 	// A reply to a clarifying question carries no context on its own ("技术方案的建议"),
 	// so it is folded back into the request that prompted the question.
 	const pending = takePendingClarification(chatId);
@@ -372,7 +389,15 @@ async function handleMessage(
 				await feishu.addBitableRecord(record);
 				records.push(record);
 			}
-			await finishProgressCard(feishu, chatId, progress, "收录完成", renderArchiveReply(records, config), "green");
+			const reminderNote = scheduleArchiveReminder(feishu, records, chatId, senderId, config);
+			await finishProgressCard(
+				feishu,
+				chatId,
+				progress,
+				"收录完成",
+				appendArchiveReminderNote(renderArchiveReply(records, config), reminderNote),
+				"green",
+			);
 			// The local store is the source of truth; a doc sync failure must not make a
 			// successful archive look failed, so it runs after the card and only logs.
 			void addRecordsToKnowledgeDoc(feishu, store, records).catch((error) =>
@@ -573,6 +598,129 @@ function normalizeComparableText(text: string) {
 
 function delay(ms: number) {
 	return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function scheduleArchiveReminder(
+	feishu: FeishuClient,
+	records: KnowledgeRecord[],
+	sourceChatId: string,
+	senderId: string,
+	config: Config,
+) {
+	const targetChatId = config.feishu.archiveReminderChatId.trim();
+	if (!targetChatId || !records.length) return "";
+	if (config.feishu.archiveReminderSkipSourceChat && targetChatId === sourceChatId) return "";
+
+	cleanupArchiveReminders();
+	const now = Date.now();
+	const delayMinutes = Math.max(0, config.feishu.archiveReminderDelayMinutes);
+	const cancelWindowMinutes = Math.max(0, config.feishu.archiveReminderCancelWindowMinutes);
+	const delayMs = delayMinutes * 60 * 1000;
+	const cancelWindowMs = cancelWindowMinutes * 60 * 1000;
+	const sendAt = now + Math.max(delayMs, cancelWindowMs);
+	const cancelUntil = now + cancelWindowMs;
+	const id = crypto.randomUUID();
+	const timer = setTimeout(
+		() => {
+			void sendArchiveReminder(id, feishu, config).catch((error) =>
+				console.error("Failed to send delayed archive reminder", error),
+			);
+		},
+		Math.max(0, sendAt - now),
+	);
+
+	scheduledArchiveReminders.set(id, {
+		id,
+		records,
+		sourceChatId,
+		targetChatId,
+		senderId,
+		createdAt: now,
+		sendAt,
+		cancelUntil,
+		timer,
+	});
+
+	const sendLabel = formatDuration(sendAt - now);
+	if (!cancelWindowMs) {
+		return `群提醒将在 ${sendLabel} 后发送到指定群。`;
+	}
+	return `群提醒将在 ${sendLabel} 后发送到指定群，${formatDuration(cancelWindowMs)}内回复「撤回」或「取消提醒」可以取消这次群提醒。`;
+}
+
+async function sendArchiveReminder(id: string, feishu: FeishuClient, config: Config) {
+	const reminder = scheduledArchiveReminders.get(id);
+	if (!reminder) return;
+	scheduledArchiveReminders.delete(id);
+	await feishu.sendCard(
+		reminder.targetChatId,
+		renderResultCard("收录完成", renderArchiveReply(reminder.records, config), "green"),
+	);
+	console.info(
+		`Sent delayed archive reminder: records=${reminder.records.length} target=${reminder.targetChatId} source=${reminder.sourceChatId}`,
+	);
+}
+
+async function cancelLatestArchiveReminder(chatId: string, senderId: string, feishu: FeishuClient) {
+	cleanupArchiveReminders();
+	const now = Date.now();
+	const reminders = Array.from(scheduledArchiveReminders.values())
+		.filter((reminder) => reminder.senderId === senderId)
+		.sort((a, b) => b.createdAt - a.createdAt);
+
+	const cancellable = reminders.find((reminder) => reminder.cancelUntil >= now);
+	if (!cancellable) {
+		const hasPending = reminders.some((reminder) => reminder.sendAt > now);
+		await feishu.sendCard(
+			chatId,
+			renderResultCard(
+				hasPending ? "撤回窗口已过" : "没有可撤回提醒",
+				hasPending
+					? "我找到了你最近的待发送群提醒，但它已经过了撤回窗口。需要从资料库删除的话，可以发“删除 + 原链接”。"
+					: "我没有找到你在撤回窗口内的待发送群提醒。收录链接后，请在提示的时间内回复「撤回」或「取消提醒」。",
+				"yellow",
+			),
+		);
+		return;
+	}
+
+	clearTimeout(cancellable.timer);
+	scheduledArchiveReminders.delete(cancellable.id);
+	await feishu.sendCard(
+		chatId,
+		renderResultCard("已撤回群提醒", renderArchiveReminderCancelReply(cancellable.records), "green"),
+	);
+	console.info(`Canceled delayed archive reminder: records=${cancellable.records.length} sender=${senderId}`);
+}
+
+function cleanupArchiveReminders() {
+	const now = Date.now();
+	for (const [id, reminder] of scheduledArchiveReminders) {
+		if (reminder.sendAt + 10 * 60 * 1000 < now) {
+			clearTimeout(reminder.timer);
+			scheduledArchiveReminders.delete(id);
+		}
+	}
+}
+
+function isArchiveReminderCancelText(text: string) {
+	return /^(撤回|取消|取消提醒|撤回提醒|别发群里|不要发群里|不要提醒|cancel)$/i.test(text.trim());
+}
+
+function appendArchiveReminderNote(body: string, reminderNote: string) {
+	return reminderNote ? `${body}\n\n${reminderNote}` : body;
+}
+
+function renderArchiveReminderCancelReply(records: KnowledgeRecord[]) {
+	const titles = records.map((record, index) => `${index + 1}. ${record.title}`).join("\n");
+	return `已取消这次收录的群提醒，不会再发到指定群。\n\n${titles}\n\n资料仍然保留在资料库里；如果这个链接本身也收错了，可以继续发“删除 + 原链接”。`;
+}
+
+function formatDuration(ms: number) {
+	const totalSeconds = Math.max(0, Math.round(ms / 1000));
+	if (totalSeconds < 60) return `${totalSeconds} 秒`;
+	const minutes = Math.ceil(totalSeconds / 60);
+	return `${minutes} 分钟`;
 }
 
 const ENGLISH_ALLOWED_WORDS = new Set([

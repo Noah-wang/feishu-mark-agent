@@ -56,6 +56,7 @@ Recommended:
 - `FEISHU_BITABLE_APP_TOKEN` and `FEISHU_BITABLE_TABLE_ID`: writes structured rows into Bitable.
 - `PI_AGENT_BINARY`: the Pi binary called for analysis. Defaults to `pi`.
 - `TENCENTCLOUD_SECRET_ID`, `TENCENTCLOUD_SECRET_KEY`, `TENCENTCLOUD_REGION`, and `TENCENTCLOUD_CVM_INSTANCE_ID`: enables Tencent Cloud CVM status and monitor metrics.
+- `FEISHU_ARCHIVE_REMINDER_CHAT_ID`: sends a delayed group reminder after a link is archived.
 
 ## Analysis Model
 
@@ -153,6 +154,37 @@ the record. This uses Feishu Contact API `contact/v3/users/{user_id}` with
 `contact:contact.base:readonly`. If that scope is missing, Mark falls back to a generic
 `飞书用户` label in human-facing replies and documents instead of showing a raw `ou_...`
 id.
+
+## Delayed Group Reminder
+
+Mark can announce new archived records to a Feishu group after a short delay. This is
+useful when links are collected in private chat but the team still wants a shared
+notification.
+
+Configure the target group and timing:
+
+```bash
+FEISHU_ARCHIVE_REMINDER_CHAT_ID=oc_xxx
+FEISHU_ARCHIVE_REMINDER_DELAY_MINUTES=5
+FEISHU_ARCHIVE_REMINDER_CANCEL_WINDOW_MINUTES=1
+FEISHU_ARCHIVE_REMINDER_SKIP_SOURCE_CHAT=true
+```
+
+After a successful archive, Mark still replies to the sender immediately. If a target
+group is configured, the reply also says when the group reminder will be sent and how
+long the sender has to cancel it. During that cancel window, send Mark one of:
+
+```text
+撤回
+取消提醒
+```
+
+Canceling only prevents the delayed group reminder. The record remains in the
+knowledge base, because Mark may already have written it to the local archive and
+Feishu doc. To remove the record too, send `删除 + 原链接`.
+
+`FEISHU_ARCHIVE_REMINDER_SKIP_SOURCE_CHAT=true` prevents duplicate reminders when the
+configured reminder group is the same chat where the link was originally sent.
 
 
 ## Local Knowledge Files

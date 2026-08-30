@@ -19,6 +19,10 @@ export interface Config {
 		appSecret: string;
 		verificationToken: string;
 		encryptKey: string;
+		archiveReminderChatId: string;
+		archiveReminderDelayMinutes: number;
+		archiveReminderCancelWindowMinutes: number;
+		archiveReminderSkipSourceChat: boolean;
 		bitableAppToken: string;
 		bitableTableId: string;
 		docId: string;
@@ -69,6 +73,12 @@ function envInt(name: string, fallback: number) {
 	return Number.isFinite(value) ? value : fallback;
 }
 
+function envBool(name: string, fallback: boolean) {
+	const value = env(name).toLowerCase();
+	if (!value) return fallback;
+	return ["1", "true", "yes", "y", "on"].includes(value);
+}
+
 export async function loadConfig(): Promise<Config> {
 	loadDotEnv(resolve(PACKAGE_DIR, ".env"));
 	// Resolved against the package rather than the working directory. `resolve` on a bare
@@ -87,6 +97,10 @@ export async function loadConfig(): Promise<Config> {
 			appSecret: env("FEISHU_APP_SECRET"),
 			verificationToken: env("FEISHU_VERIFICATION_TOKEN"),
 			encryptKey: env("FEISHU_ENCRYPT_KEY"),
+			archiveReminderChatId: env("FEISHU_ARCHIVE_REMINDER_CHAT_ID"),
+			archiveReminderDelayMinutes: envInt("FEISHU_ARCHIVE_REMINDER_DELAY_MINUTES", 5),
+			archiveReminderCancelWindowMinutes: envInt("FEISHU_ARCHIVE_REMINDER_CANCEL_WINDOW_MINUTES", 1),
+			archiveReminderSkipSourceChat: envBool("FEISHU_ARCHIVE_REMINDER_SKIP_SOURCE_CHAT", true),
 			bitableAppToken: env("FEISHU_BITABLE_APP_TOKEN"),
 			bitableTableId: env("FEISHU_BITABLE_TABLE_ID"),
 			docId: env("FEISHU_DOC_ID"),
