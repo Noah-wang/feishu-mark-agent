@@ -9,6 +9,15 @@ It supports two flows:
 
 Longer tasks use an interactive Feishu progress card. Mark sends one card immediately, updates it while it reads links or searches records, and replaces the same card with the final result when the work is done.
 
+## Recent Updates
+
+**2026-08-30:** Added delayed group reminders for archived links. Configure
+`FEISHU_ARCHIVE_REMINDER_CHAT_ID`, the delay, and the cancel window; the sender can
+reply `撤回` or `取消提醒` before the window expires to prevent the group notification.
+
+**2026-08-29:** Added Feishu Wiki/docx mirroring so archived records can be browsed
+from chat replies, list results, and delete confirmations.
+
 Mark first classifies each Feishu message into one of four intents:
 
 - `archive_links`: save and analyze links.

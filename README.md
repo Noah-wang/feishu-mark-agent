@@ -21,6 +21,15 @@
 并持续维护一份团队可以直接翻阅的飞书文档。几周之后你用大白话问一句，它从团队真正
 收集过的内容里给你答案，并附上出处。
 
+## 最新更新
+
+**2026-08-30：延迟群提醒和撤回窗口。** Mark 现在可以在私聊收录成功后，延迟把同样的
+收录卡片发到指定飞书群。管理员可以配置目标群、提醒延迟和可撤回时间；发送者在窗口内
+回复 `撤回` 或 `取消提醒`，就能取消这次群提醒，避免把误发链接同步到公开群里。
+
+**2026-08-29：飞书资料库镜像。** 收录内容会同步到可浏览的飞书 Wiki/docx 文档，聊天
+回复、列表和删除结果都会带上资料库入口，方便团队直接翻阅。
+
 ## 实际效果
 
 **发一个链接。** Mark 立刻回一张卡片，然后在读取、分析、归档的过程中原地更新它，不会让你干等。
@@ -133,6 +142,7 @@ npm --workspace=packages/feishu-knowledge-agent run doc:create
 | `BILIBILI_SESSDATA` · `BILIBILI_BILI_JCT` · `BILIBILI_BUVID3` | B 站字幕访问 |
 | `X_BEARER_TOKEN` | 让 X/Twitter 抽取更可靠 |
 | `FEISHU_BITABLE_APP_TOKEN` · `FEISHU_BITABLE_TABLE_ID` | 同步结构化多维表格 |
+| `FEISHU_ARCHIVE_REMINDER_CHAT_ID` | 收录后延迟提醒指定飞书群 |
 | `TENCENTCLOUD_SECRET_ID` · `TENCENTCLOUD_SECRET_KEY` | 腾讯云 CVM 状态和监控指标 |
 
 完整列表见 [`.env.example`](packages/feishu-knowledge-agent/.env.example)。
