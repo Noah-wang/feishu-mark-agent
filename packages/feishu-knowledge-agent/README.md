@@ -11,6 +11,11 @@ Longer tasks use an interactive Feishu progress card. Mark sends one card immedi
 
 ## Recent Updates
 
+**2026-08-30:** Added a general Decision Agent for product, operations, and technical
+choices. It searches internal records first, safely supplements them with public web
+research, reads the actual sources, compares candidates, and stores the conclusion for
+later review.
+
 **2026-08-30:** Added delayed group reminders for archived links. Configure
 `FEISHU_ARCHIVE_REMINDER_CHAT_ID`, the delay, and the cancel window; the sender can
 reply `撤回` or `取消提醒` before the window expires to prevent the group notification.
@@ -22,6 +27,8 @@ Mark first classifies each Feishu message into one of four intents:
 
 - `archive_links`: save and analyze links.
 - `ask_question`: answer recommendation or comparison questions from saved records.
+- `make_decision`: research alternatives, compare trade-offs, and save a recommendation.
+- `query_decisions`: explain a previous choice from the evidence stored at that time.
 - `list_records`: list recent or matching records.
 - `server_status`: report Mark server health and Tencent Cloud CVM metrics.
 - `help`: explain how to use Mark.
@@ -61,6 +68,9 @@ Recommended:
 
 - `FEISHU_ENCRYPT_KEY`: enables Feishu signature verification.
 - `MARK_LLM_BASE_URL`, `MARK_LLM_API_KEY`, and `MARK_LLM_MODEL`: OpenAI-compatible LLM used for link analysis and recommendation answers. Mark tries this before Pi Agent.
+- `MARK_WEB_SEARCH_API_KEY`: Brave Search API key used by the Decision Agent. Without it,
+  the Agent still compares internal records and reports that public research was unavailable.
+- `FEISHU_DECISION_DOC_ID` or `FEISHU_DECISION_DOC_URL`: separate Decision Center document.
 - `X_BEARER_TOKEN`: makes X/Twitter extraction reliable.
 - `FEISHU_BITABLE_APP_TOKEN` and `FEISHU_BITABLE_TABLE_ID`: writes structured rows into Bitable.
 - `PI_AGENT_BINARY`: the Pi binary called for analysis. Defaults to `pi`.
@@ -74,6 +84,46 @@ Mark analyzes collected links in this order:
 1. OpenAI-compatible LLM API when `MARK_LLM_API_KEY` is configured.
 2. Pi Agent CLI through `PI_AGENT_BINARY`.
 3. A simple local heuristic fallback.
+
+## General Decision Agent
+
+Selection, comparison, prioritization, and "should we" questions use a bounded plan-and-execute
+agent instead of the normal archive Q&A path. The agent:
+
+1. Extracts the goal, hard constraints, preferences, assumptions, and a research plan.
+2. Asks one question only when the missing subject would make every answer unusable.
+3. Searches the collected knowledge base and team experience first.
+4. Generates anonymized public queries, searches the web, and reads the actual result pages.
+5. Compares two to five candidates with `met`, `partial`, `not_met`, and `unknown` conditions.
+6. Saves the decision and its evidence to `.knowledge/decisions.json`.
+
+External search uses the official Brave Search API by default. Configure:
+
+```bash
+MARK_WEB_SEARCH_ENABLED=true
+MARK_WEB_SEARCH_PROVIDER=brave
+MARK_WEB_SEARCH_API_KEY=xxx
+```
+
+A custom SearXNG-compatible JSON endpoint is also supported:
+
+```bash
+MARK_WEB_SEARCH_PROVIDER=custom
+MARK_WEB_SEARCH_URL=https://search.example.com/search?q={query}&format=json
+```
+
+Before a query leaves Mark, deterministic redaction removes URLs, IP addresses, email
+addresses, common API-key formats, Feishu ids, and obvious company/internal-project names.
+Failed searches or unreadable pages become visible research warnings rather than invented facts.
+
+Create the separate Decision Center document once:
+
+```bash
+npm --workspace=packages/feishu-knowledge-agent run decision-doc:create
+```
+
+Put the returned id in `FEISHU_DECISION_DOC_ID`. If the document is not configured or cannot
+be updated, the local decision remains saved and the Feishu result card explains the mirror gap.
 
 For thebestai.net with DeepSeek:
 
@@ -202,6 +252,8 @@ By default the service writes:
 
 - `.knowledge/records.json`
 - `.knowledge/knowledge.md`
+- `.knowledge/decisions.json`
+- `.knowledge/decisions.md`
 
 These files are the local fallback knowledge base. Bitable and a vector database can be added without changing the Feishu interaction contract.
 

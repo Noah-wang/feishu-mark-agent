@@ -23,6 +23,10 @@
 
 ## 最新更新
 
+**2026-08-30：通用决策 Agent。** Mark 现在能处理产品、运营和技术选型：先检索团队资料，
+再用脱敏查询自动联网补充，深入读取候选来源后给出带证据的推荐、备选、风险和下一步。
+每次结论会保存到独立的“Mark 决策中心”，以后可以继续问“上次为什么选它”。
+
 **2026-08-30：延迟群提醒和撤回窗口。** Mark 现在可以在私聊收录成功后，延迟把同样的
 收录卡片发到指定飞书群。管理员可以配置目标群、提醒延迟和可撤回时间；发送者在窗口内
 回复 `撤回` 或 `取消提醒`，就能取消这次群提醒，避免把误发链接同步到公开群里。
@@ -54,6 +58,8 @@ Mark 检索资料库，给出带取舍分析的回答，只引用团队实际收
 | 你说 | Mark 做 |
 |---|---|
 | *（直接粘任意链接）* | 读取、摘要、分类、归档 |
+| 预算每月 3000 元，帮我选一个社媒监测方案 | 内部检索、联网研究、比较并保存决策 |
+| 上次为什么没选另一个方案 | 基于当时的决策记录复盘 |
 | 列出最近收录的 10 个项目 | 列出最近或匹配的记录 |
 | 把这条删掉 + *（链接）* | 删除记录并重新同步文档 |
 | 把文档里的英文改成中文 | 改写飞书文档里的英文段落 |
@@ -80,7 +86,7 @@ Mark 会丢弃密度低于 10 行每分钟、或最后一句时间戳落在视�
       │
       ▼
   webhook 服务 ──► 规划器 ──► 收录 · 问答 · 列表 · 删除
-      │                      改文档 · 查服务器 · 追问澄清
+      │                      决策 Agent · 改文档 · 查服务器
       ▼
   内容抽取 ──► LLM 分析 ──► 本地资料库 ──► 飞书文档 + 回复
 ```
@@ -116,6 +122,12 @@ npm --workspace=packages/feishu-knowledge-agent run doc:create
 把打印出来的 id 填进 `FEISHU_DOC_ID`。用 tenant token 创建的文档默认只有应用自己可见，
 所以要在飞书里打开一次，把自己或群组加成协作者，否则你点开是空白。
 
+决策记录使用单独文档，创建方式相同：
+
+```bash
+npm --workspace=packages/feishu-knowledge-agent run decision-doc:create
+```
+
 ## 配置
 
 全部通过环境变量配置。真实凭据放在 `.env` 或服务器 secrets 里，不要提交。
@@ -134,6 +146,8 @@ npm --workspace=packages/feishu-knowledge-agent run doc:create
 | `FEISHU_ENCRYPT_KEY` | 开启请求签名校验 |
 | `FEISHU_DOC_ID` 或 `FEISHU_DOC_URL` | 可翻阅的资料库文档 |
 | `MARK_LLM_BASE_URL` · `MARK_LLM_API_KEY` · `MARK_LLM_MODEL` | OpenAI 兼容接口，用于摘要和问答 |
+| `MARK_WEB_SEARCH_API_KEY` | Brave Search API key，用于决策 Agent 自动联网研究 |
+| `FEISHU_DECISION_DOC_ID` 或 `FEISHU_DECISION_DOC_URL` | 独立的 Mark 决策中心文档 |
 
 **可选集成**
 
@@ -182,6 +196,7 @@ packages/tui/                      终端 UI 库
 ## 安全
 
 - `.env`、本地资料库、B 站 cookie 文件、构建产物都已被 Git 忽略。
+- 决策 Agent 联网前会移除私有 URL、IP、邮箱、飞书 id 和常见凭据格式。
 - 飞书和云服务的凭据按最小权限配置。
 - 任何在聊天、终端、issue 或日志里出现过的凭据，一律重置。
 - 不要提交 App Secret、API key、服务器地址或私有文档链接。
