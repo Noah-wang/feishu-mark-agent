@@ -332,7 +332,6 @@ function heuristicDecisionBrief(question: string, allowClarification: boolean): 
 
 function normalizeDecisionResult(raw: any, evidence: DecisionEvidence[]): DecisionResult {
 	const validEvidenceIds = new Set(evidence.map((item) => item.id));
-	const validEvidenceUrls = new Set(evidence.map((item) => normalizeUrl(item.url)));
 	const criteria: DecisionCriterion[] = Array.isArray(raw?.criteria)
 		? raw.criteria
 				.map((item: any) => ({ name: cleanString(item?.name), requirement: cleanString(item?.requirement) }))
@@ -341,7 +340,7 @@ function normalizeDecisionResult(raw: any, evidence: DecisionEvidence[]): Decisi
 		: [];
 	const candidates: DecisionCandidate[] = Array.isArray(raw?.candidates)
 		? raw.candidates
-				.map((item: any) => normalizeCandidate(item, validEvidenceIds, validEvidenceUrls))
+				.map((item: any) => normalizeCandidate(item, validEvidenceIds, evidence))
 				.filter((item: DecisionCandidate) => item.name && item.evidenceIds.length)
 				.slice(0, 5)
 		: [];
@@ -358,24 +357,31 @@ function normalizeDecisionResult(raw: any, evidence: DecisionEvidence[]): Decisi
 	};
 }
 
-function normalizeCandidate(
-	raw: any,
-	validEvidenceIds: Set<string>,
-	validEvidenceUrls: Set<string>,
-): DecisionCandidate {
+function normalizeCandidate(raw: any, validEvidenceIds: Set<string>, evidence: DecisionEvidence[]): DecisionCandidate {
 	const conditions: DecisionConditionAssessment[] = Array.isArray(raw?.conditions)
 		? raw.conditions
 				.map((item: any) => normalizeCondition(item, validEvidenceIds))
 				.filter((item: DecisionConditionAssessment) => item.criterion)
 		: [];
-	const evidenceIds = [
-		...stringArray(raw?.evidenceIds).filter((id) => validEvidenceIds.has(id)),
-		...conditions.flatMap((condition) => condition.evidenceIds),
-	];
+	const explicitEvidenceIds = normalizeEvidenceIds(raw?.evidenceIds, validEvidenceIds);
+	const evidenceIds = [...explicitEvidenceIds, ...conditions.flatMap((condition) => condition.evidenceIds)];
 	const candidateUrl = normalizeUrl(cleanString(raw?.url));
+	const candidateName = cleanString(raw?.name);
+	if (!evidenceIds.length) {
+		for (const item of evidence) {
+			const title = item.title.toLowerCase();
+			const name = candidateName.toLowerCase();
+			if (
+				(candidateUrl && normalizeUrl(item.url) === candidateUrl) ||
+				(name.length >= 3 && (title.includes(name) || name.includes(title)))
+			) {
+				evidenceIds.push(item.id);
+			}
+		}
+	}
 	return {
-		name: cleanString(raw?.name),
-		url: validEvidenceUrls.has(candidateUrl) ? cleanString(raw?.url) : "",
+		name: candidateName,
+		url: evidence.some((item) => normalizeUrl(item.url) === candidateUrl) ? cleanString(raw?.url) : "",
 		summary: cleanString(raw?.summary),
 		conditions,
 		advantages: stringArray(raw?.advantages),
@@ -391,8 +397,22 @@ function normalizeCondition(raw: any, validEvidenceIds: Set<string>): DecisionCo
 		criterion: cleanString(raw?.criterion),
 		status,
 		reason: cleanString(raw?.reason),
-		evidenceIds: stringArray(raw?.evidenceIds).filter((id) => validEvidenceIds.has(id)),
+		evidenceIds: normalizeEvidenceIds(raw?.evidenceIds, validEvidenceIds),
 	};
+}
+
+function normalizeEvidenceIds(value: unknown, validEvidenceIds: Set<string>) {
+	return uniqueStrings(
+		stringArray(value)
+			.map((id) => {
+				const normalized = id
+					.trim()
+					.toUpperCase()
+					.replace(/^\[|\]$/g, "");
+				return /^\d+$/.test(normalized) ? `E${normalized}` : normalized;
+			})
+			.filter((id) => validEvidenceIds.has(id)),
+	);
 }
 
 function internalRecordEvidence(record: KnowledgeRecord, now: Date): DecisionEvidence {
