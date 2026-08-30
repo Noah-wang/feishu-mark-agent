@@ -15,6 +15,8 @@ import { SOURCE_TYPE_LABELS } from "./types.js";
 const VALID_INTENTS = new Set<MessageIntentName>([
 	"archive_links",
 	"ask_question",
+	"make_decision",
+	"query_decisions",
 	"list_records",
 	"delete_records",
 	"server_status",
@@ -24,6 +26,8 @@ const VALID_INTENTS = new Set<MessageIntentName>([
 const VALID_AGENT_ACTIONS = new Set<AgentActionName>([
 	"archive_links",
 	"ask_question",
+	"make_decision",
+	"query_decisions",
 	"list_records",
 	"delete_records",
 	"translate_records",
@@ -39,7 +43,9 @@ Your job is to understand the user's goal, choose the best tool, and ask a clari
 
 Available tools:
 - archive_links: save, summarize, classify, and tag URLs sent by the user.
-- ask_question: answer recommendations or comparisons using saved records.
+- ask_question: answer factual or exploratory questions using saved records.
+- make_decision: compare options and recommend what the user or company should choose, do, buy, build, or prioritize. This can use saved records and public web research.
+- query_decisions: review a previous decision, including why an option was chosen or rejected.
 - list_records: list, browse, count, or inspect saved records.
 - delete_records: remove saved records from the knowledge base.
 - translate_records: rewrite saved records that contain English into Simplified Chinese, then sync the Feishu knowledge document.
@@ -60,11 +66,16 @@ Important behavior:
 - If the user has already answered a clarifying question, act on the combined request
   instead of asking again.
 - If URLs are present and the user does not ask about existing records, use archive_links.
+- Requests containing recommendation, selection, comparison, trade-off, priority, "should we",
+  or "which is better" are make_decision, even when the subject is product or operations rather
+  than software.
+- Questions about "last time", "previously", "why we chose", "why we did not choose", or
+  decision history are query_decisions.
 - Return strict JSON only.
 
 Schema:
 {
-  "action": "archive_links | ask_question | list_records | delete_records | translate_records | server_status | help | clarify",
+  "action": "archive_links | ask_question | make_decision | query_decisions | list_records | delete_records | translate_records | server_status | help | clarify",
   "query": "cleaned user goal in Chinese",
   "reason": "short Chinese reason",
   "question": "only when action is clarify; one Chinese question"
@@ -87,7 +98,9 @@ Decide the user's intent. Return strict JSON only.
 
 Allowed intents:
 - archive_links: user wants to save, collect, mark, bookmark, summarize, classify, or add links to the knowledge base.
-- ask_question: user asks for a recommendation, comparison, analysis, or answer based on saved records.
+- ask_question: user asks for a factual, explanatory, or exploratory answer based on saved records.
+- make_decision: user wants a recommendation or choice after comparing options and trade-offs.
+- query_decisions: user asks about a previous decision or why an option was chosen or rejected.
 - list_records: user asks to list, show, browse, count, or review existing saved records.
 - delete_records: user wants to delete, remove, clear, hide, or take saved records out of the knowledge base.
 - server_status: user asks for Mark server, Tencent Cloud CVM, host health, CPU, memory, disk, network, PM2, Caddy, uptime, or monitoring status.
@@ -96,12 +109,12 @@ Allowed intents:
 Rules:
 - If the user asks to delete/remove/clear/take out saved knowledge, prefer delete_records even when URLs are present.
 - If URLs are present and the user does not clearly ask a question about existing records, prefer archive_links.
-- If there are no URLs and the user asks for tools, services, projects, recommendations, or "which one", prefer ask_question.
+- If there are no URLs and the user asks for recommendations, comparisons, selection, or "which one", prefer make_decision.
 - Do not invent actions outside the allowed intents.
 
 Return schema:
 {
-  "intent": "archive_links | ask_question | list_records | delete_records | server_status | help",
+  "intent": "archive_links | ask_question | make_decision | query_decisions | list_records | delete_records | server_status | help",
   "query": "cleaned user request in Chinese",
   "reason": "short Chinese reason"
 }
@@ -420,6 +433,11 @@ async function runPiJson(prompt: string, config: Config): Promise<any> {
 	return JSON.parse(jsonText);
 }
 
+/** Shared structured-output runner for agent modules that need the same LLM -> Pi fallback. */
+export async function runStructuredModel(prompt: string, config: Config): Promise<any> {
+	return runLlmJson(prompt, config).catch(() => runPiJson(prompt, config));
+}
+
 async function runLlmJson(prompt: string, config: Config): Promise<any> {
 	if (!config.llm.baseUrl || !config.llm.apiKey || !config.llm.model) {
 		throw new Error("LLM service is not configured");
@@ -539,6 +557,12 @@ function heuristicAgentPlan(text: string, urls: string[]): AgentPlan {
 	) {
 		return { action: "translate_records", query: normalized, reason: "用户想把知识文档中的英文内容改成中文" };
 	}
+	if (isDecisionHistoryQuery(normalized)) {
+		return { action: "query_decisions", query: normalized, reason: "用户想复盘之前保存的决策" };
+	}
+	if (isDecisionQuery(normalized) && !urls.length) {
+		return { action: "make_decision", query: normalized, reason: "用户希望比较方案并形成决策建议" };
+	}
 	return { action: intent.intent, query: intent.query, reason: intent.reason };
 }
 
@@ -567,8 +591,27 @@ function heuristicIntent(text: string, urls: string[]): MessageIntent {
 	) {
 		return { intent: "list_records", query: normalized, reason: "用户想查看已收录资料" };
 	}
+	if (isDecisionHistoryQuery(normalized)) {
+		return { intent: "query_decisions", query: normalized, reason: "用户想复盘之前保存的决策" };
+	}
+	if (isDecisionQuery(normalized) && !urls.length) {
+		return { intent: "make_decision", query: normalized, reason: "用户希望比较方案并形成决策建议" };
+	}
 	if (urls.length) {
 		return { intent: "archive_links", query: normalized, reason: "消息中包含链接，默认按收录处理" };
 	}
 	return { intent: "ask_question", query: normalized, reason: "无链接消息默认按知识库问答处理" };
+}
+
+function isDecisionHistoryQuery(text: string) {
+	return (
+		/(决策记录|决策历史|上次|之前|当时|以前)/i.test(text) &&
+		/(为什么|原因|选了|选择|没选|不选|决定|决策|方案|复盘)/i.test(text)
+	);
+}
+
+function isDecisionQuery(text: string) {
+	return /(推荐|选型|怎么选|选哪个|哪个好|更合适|帮.*选|比较|对比|取舍|优先级|要不要|是否应该|值不值得|应该用|选择.*方案|给.*方案)/i.test(
+		text,
+	);
 }

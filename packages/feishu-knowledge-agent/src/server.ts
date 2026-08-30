@@ -8,11 +8,20 @@ import {
 	translateTextToChinese,
 } from "./analyzer.js";
 import type { Config } from "./config.js";
+import { answerDecisionHistory, type DecisionProgress, runDecisionAgent } from "./decisionAgent.js";
+import { DecisionStore } from "./decisionStore.js";
 import { extractContent } from "./extractors.js";
 import { type FeishuCard, FeishuClient, parseFeishuEvent, verifyFeishuSignature } from "./feishu.js";
 import { collectServerStatus, renderServerStatusReport } from "./serverStatus.js";
 import { KnowledgeStore } from "./store.js";
-import type { FeishuDocumentTextBlock, KnowledgeRecord, Recommendation, RequirementPoint } from "./types.js";
+import type {
+	DecisionConditionStatus,
+	DecisionRecord,
+	FeishuDocumentTextBlock,
+	KnowledgeRecord,
+	Recommendation,
+	RequirementPoint,
+} from "./types.js";
 import { readableSharer } from "./types.js";
 import { extractUrls } from "./url.js";
 
@@ -46,6 +55,12 @@ interface ScheduledArchiveReminder {
 	timer: ReturnType<typeof setTimeout>;
 }
 
+interface RecentDecisionContext {
+	question: string;
+	decisionId: string;
+	expiresAt: number;
+}
+
 /**
  * Asking a clarifying question is useless without somewhere to keep it: each Feishu
  * event was handled independently, so the answer arrived with no idea what it
@@ -55,6 +70,8 @@ interface ScheduledArchiveReminder {
 const pendingClarifications = new Map<string, PendingClarification>();
 const CLARIFICATION_TTL_MS = 30 * 60 * 1000;
 const scheduledArchiveReminders = new Map<string, ScheduledArchiveReminder>();
+const recentDecisionContexts = new Map<string, RecentDecisionContext>();
+const DECISION_CONTEXT_TTL_MS = 60 * 60 * 1000;
 
 function takePendingClarification(chatId: string): PendingClarification | undefined {
 	const pending = pendingClarifications.get(chatId);
@@ -75,8 +92,30 @@ function rememberClarification(chatId: string, originalText: string, question: s
 	}
 }
 
+function rememberDecisionContext(chatId: string, decision: DecisionRecord) {
+	recentDecisionContexts.set(chatId, {
+		question: decision.question,
+		decisionId: decision.id,
+		expiresAt: Date.now() + DECISION_CONTEXT_TTL_MS,
+	});
+	for (const [key, value] of recentDecisionContexts) {
+		if (value.expiresAt <= Date.now()) recentDecisionContexts.delete(key);
+	}
+}
+
+function decisionFollowupContext(chatId: string, text: string) {
+	if (!/(调整条件|继续深挖|深入一下|换一批|换些方案|再找找)/i.test(text)) return undefined;
+	const context = recentDecisionContexts.get(chatId);
+	if (!context || context.expiresAt <= Date.now()) {
+		recentDecisionContexts.delete(chatId);
+		return undefined;
+	}
+	return context;
+}
+
 export function startServer(config: Config) {
 	const store = new KnowledgeStore(config);
+	const decisionStore = new DecisionStore(config);
 	const feishu = new FeishuClient(config);
 
 	const server = createServer(async (request, response) => {
@@ -101,6 +140,7 @@ export function startServer(config: Config) {
 						parsed.message.chatId,
 						parsed.message.senderId,
 						store,
+						decisionStore,
 						feishu,
 						config,
 					).catch((error) => {
@@ -127,6 +167,7 @@ async function handleMessage(
 	chatId: string,
 	senderId: string,
 	store: KnowledgeStore,
+	decisionStore: DecisionStore,
 	feishu: FeishuClient,
 	config: Config,
 ) {
@@ -139,9 +180,12 @@ async function handleMessage(
 	// A reply to a clarifying question carries no context on its own ("技术方案的建议"),
 	// so it is folded back into the request that prompted the question.
 	const pending = takePendingClarification(chatId);
+	const decisionFollowup = pending ? undefined : decisionFollowupContext(chatId, incomingText);
 	const messageText = pending
 		? `${pending.originalText}\n\n（我问了「${pending.question}」，用户补充：${incomingText}）`
-		: incomingText;
+		: decisionFollowup
+			? `${decisionFollowup.question}\n\n（基于上一轮决策 ${decisionFollowup.decisionId}，用户继续要求：${incomingText}）`
+			: incomingText;
 	if (pending) console.info(`Merged clarification answer into the original request: chat=${chatId}`);
 	try {
 		Object.assign(progress, await startProgressCard(feishu, chatId));
@@ -346,6 +390,81 @@ async function handleMessage(
 				"服务器状态",
 				renderServerStatusReport(statusReport),
 				"green",
+			);
+			return;
+		}
+
+		if (agentPlan.action === "query_decisions") {
+			await updateProgressCard(feishu, progress, "Mark 正在查找历史决策", [
+				{ label: "理解消息", state: "done" },
+				{ label: "检索决策中心", state: "active" },
+				{ label: "整理当时依据", state: "pending" },
+			]);
+			const decisions = await decisionStore.search(agentPlan.query || messageText, 5);
+			const answer = await answerDecisionHistory(agentPlan.query || messageText, decisions, config);
+			await finishProgressCard(
+				feishu,
+				chatId,
+				progress,
+				decisions.length ? "决策复盘" : "没有找到相关决策",
+				appendDecisionDocLink(answer, config),
+				decisions.length ? "purple" : "yellow",
+			);
+			return;
+		}
+
+		if (agentPlan.action === "make_decision") {
+			const question = agentPlan.query || messageText;
+			const requester = await resolveSharerDisplayName(feishu, senderId);
+			const outcome = await runDecisionAgent(
+				question,
+				requester || readableSharer(senderId),
+				senderId,
+				store,
+				config,
+				{
+					allowClarification: !pending,
+					onProgress: async (decisionProgress) => {
+						await updateProgressCard(
+							feishu,
+							progress,
+							decisionProgressTitle(decisionProgress),
+							decisionProgressSteps(decisionProgress),
+						);
+					},
+				},
+			);
+			if (outcome.kind === "clarification") {
+				rememberClarification(chatId, incomingText, outcome.question);
+				await finishProgressCard(feishu, chatId, progress, "需要确认一个关键条件", outcome.question, "yellow");
+				return;
+			}
+
+			await updateProgressCard(feishu, progress, "Mark 正在保存决策", [
+				{ label: "理解目标和条件", state: "done" },
+				{ label: "检索内部和外部证据", state: "done" },
+				{ label: "比较候选方案", state: "done" },
+				{ label: "写入决策中心", state: "active" },
+			]);
+			await decisionStore.save(outcome.decision);
+			rememberDecisionContext(chatId, outcome.decision);
+			if (decisionDocUrl(config)) {
+				try {
+					await feishu.syncDecisionDoc(await decisionStore.list());
+				} catch (error) {
+					console.error("Failed to sync Feishu decision doc", error);
+					outcome.warnings.push(`决策已保存，但飞书决策中心同步失败：${summarizeFeishuError(error)}`);
+				}
+			} else {
+				outcome.warnings.push("决策已保存到本地，尚未配置飞书决策中心文档。");
+			}
+			await finishProgressCard(
+				feishu,
+				chatId,
+				progress,
+				"决策建议",
+				renderDecisionReply(outcome.decision, outcome.warnings, config),
+				"purple",
 			);
 			return;
 		}
@@ -792,6 +911,109 @@ function knowledgeDocUrl(config: Config) {
 	return config.feishu.docUrl || (config.feishu.docId ? `https://feishu.cn/docx/${config.feishu.docId}` : "");
 }
 
+function decisionDocUrl(config: Config) {
+	return (
+		config.feishu.decisionDocUrl ||
+		(config.feishu.decisionDocId ? `https://feishu.cn/docx/${config.feishu.decisionDocId}` : "")
+	);
+}
+
+function appendDecisionDocLink(text: string, config: Config) {
+	const url = decisionDocUrl(config);
+	return url ? `${text}\n\n决策中心：${url}` : text;
+}
+
+function decisionProgressTitle(progress: DecisionProgress) {
+	return {
+		planning: "Mark 正在理解决策目标",
+		knowledge_search: "Mark 正在检索团队资料",
+		web_search: "Mark 正在联网补充资料",
+		reading_sources: "Mark 正在阅读来源",
+		comparing: "Mark 正在比较候选方案",
+		saving: "Mark 正在保存决策",
+	}[progress.stage];
+}
+
+function decisionProgressSteps(progress: DecisionProgress): ProgressStep[] {
+	const stages: Array<{ stage: DecisionProgress["stage"]; label: string }> = [
+		{ stage: "planning", label: "理解目标和条件" },
+		{ stage: "knowledge_search", label: "检索团队资料" },
+		{ stage: "web_search", label: "联网补充候选" },
+		{ stage: "reading_sources", label: "阅读和验证来源" },
+		{ stage: "comparing", label: "比较方案并形成建议" },
+	];
+	const current = stages.findIndex((item) => item.stage === progress.stage);
+	return stages.map((item, index) => ({
+		label:
+			index === current && progress.detail ? `${item.label}：${truncateInline(progress.detail, 80)}` : item.label,
+		state: index < current ? "done" : index === current ? "active" : "pending",
+	}));
+}
+
+function renderDecisionReply(decision: DecisionRecord, warnings: string[], config: Config) {
+	const conditionLabels: Record<DecisionConditionStatus, string> = {
+		met: "满足",
+		partial: "部分满足",
+		not_met: "不满足",
+		unknown: "未知",
+	};
+	const candidateSections = decision.candidates
+		.map((candidate, index) => {
+			const conditions = candidate.conditions
+				.map(
+					(condition) =>
+						`   - ${condition.criterion}：${conditionLabels[condition.status]}${condition.reason ? `，${condition.reason}` : ""}`,
+				)
+				.join("\n");
+			const risks = candidate.risks.length ? `\n   风险：${candidate.risks.join("；")}` : "";
+			return `${index + 1}. ${candidate.name}${candidate.url ? `\n   ${candidate.url}` : ""}\n   ${candidate.summary}${
+				conditions ? `\n${conditions}` : ""
+			}${risks}`;
+		})
+		.join("\n\n");
+	const alternatives = decision.alternatives.length
+		? `\n\n备选：\n${decision.alternatives.map((item) => `- ${item}`).join("\n")}`
+		: "";
+	const risks = decision.risks.length ? `\n\n主要风险：\n${decision.risks.map((item) => `- ${item}`).join("\n")}` : "";
+	const unknowns = decision.unknowns.length
+		? `\n\n待验证：\n${decision.unknowns.map((item) => `- ${item}`).join("\n")}`
+		: "";
+	const nextSteps = decision.nextSteps.length
+		? `\n\n下一步：\n${decision.nextSteps.map((item) => `- ${item}`).join("\n")}`
+		: "";
+	const sources = decision.evidence.length
+		? `\n\n证据来源：\n${decision.evidence
+				.slice(0, 10)
+				.map((item) => `[${item.id}] ${item.title}\n${item.url}`)
+				.join("\n")}`
+		: "\n\n证据来源：本次没有读取到可用来源。";
+	const warning = warnings.length
+		? `\n\n研究说明：\n${warnings
+				.slice(0, 4)
+				.map((item) => `- ${safeUserWarning(item)}`)
+				.join("\n")}`
+		: "";
+	const interaction = "\n\n你可以继续说：“调整条件”、“继续深挖”或“为什么没选另一个”。";
+	return appendDecisionDocLink(
+		`建议：${decision.recommendation}\n\n理由：${decision.rationale}\n\n信心：${
+			{
+				high: "高",
+				medium: "中",
+				low: "低",
+			}[decision.confidence]
+		}${candidateSections ? `\n\n候选对比：\n\n${candidateSections}` : ""}${alternatives}${risks}${unknowns}${nextSteps}${sources}${warning}${interaction}`,
+		config,
+	);
+}
+
+function safeUserWarning(value: string) {
+	return value
+		.replace(/\b(?:sk|rk|pk|ghp|gho|github_pat)-?[A-Za-z0-9_-]{8,}\b/g, "[已隐藏]")
+		.replace(/\bAKID[A-Za-z0-9]{8,}\b/g, "[已隐藏]")
+		.replace(/\b(?:cli|ou|oc)_[A-Za-z0-9_-]{8,}\b/g, "[已隐藏]")
+		.slice(0, 240);
+}
+
 /**
  * A single-point answer reads like the old flat recommendation; a multi-point one is
  * grouped so it is obvious which tool covers which part of the request, and which
@@ -874,11 +1096,12 @@ function renderHelpReply(config: Config) {
 
 你可以这样发我：
 1. 直接发链接：我会收录、摘要、分类和打标签。
-2. 问推荐：比如“给我推荐一个做 B 站字幕提取的工具”。
+2. 做决策：比如“预算每月 3000 元，帮我选一个社媒监测方案”。
 3. 改资料：比如“文档里英文的内容帮我改成中文”。
 4. 查资料：比如“列出最近收录的 10 个项目”。
 5. 删资料：比如“删除 + 原链接”或“去掉某某项目”。
-6. 查服务器：比如“看一下服务器状态”。
+6. 复盘决策：比如“上次为什么选了那个方案”。
+7. 查服务器：比如“看一下服务器状态”。
 
 现在我会先规划要做什么，信息不够会追问。支持的链接包括 GitHub、文章、X/Twitter 和 B 站视频。${
 		docUrl ? `\n\n收录的资料会同步到这份文档，可以直接翻阅：\n${docUrl}` : ""

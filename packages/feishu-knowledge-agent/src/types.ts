@@ -74,9 +74,92 @@ export interface Recommendation {
 	points: SolutionPoint[];
 }
 
+export type DecisionStatus = "researching" | "recommended" | "adopted" | "rejected" | "needs_review";
+
+export type DecisionConditionStatus = "met" | "partial" | "not_met" | "unknown";
+
+export type DecisionSourceKind = "internal" | "official" | "independent" | "community";
+
+export interface DecisionBrief {
+	goal: string;
+	hardConstraints: string[];
+	preferences: string[];
+	assumptions: string[];
+	clarificationQuestion: string;
+	internalQueries: string[];
+	publicSearchQueries: string[];
+}
+
+export interface DecisionEvidence {
+	id: string;
+	title: string;
+	url: string;
+	snippet: string;
+	content: string;
+	sourceKind: DecisionSourceKind;
+	fetchedAt: string;
+	internalRecordId?: string;
+}
+
+export interface DecisionCriterion {
+	name: string;
+	requirement: string;
+}
+
+export interface DecisionConditionAssessment {
+	criterion: string;
+	status: DecisionConditionStatus;
+	reason: string;
+	evidenceIds: string[];
+}
+
+export interface DecisionCandidate {
+	name: string;
+	url: string;
+	summary: string;
+	conditions: DecisionConditionAssessment[];
+	advantages: string[];
+	risks: string[];
+	unknowns: string[];
+	evidenceIds: string[];
+}
+
+export interface DecisionResult {
+	recommendation: string;
+	rationale: string;
+	alternatives: string[];
+	criteria: DecisionCriterion[];
+	candidates: DecisionCandidate[];
+	risks: string[];
+	unknowns: string[];
+	nextSteps: string[];
+	confidence: "high" | "medium" | "low";
+}
+
+export interface DecisionRecord extends DecisionResult {
+	id: string;
+	question: string;
+	requester: string;
+	requesterId: string;
+	goal: string;
+	hardConstraints: string[];
+	preferences: string[];
+	assumptions: string[];
+	evidence: DecisionEvidence[];
+	status: DecisionStatus;
+	createdAt: string;
+	updatedAt: string;
+}
+
+export type DecisionAgentOutcome =
+	| { kind: "clarification"; question: string }
+	| { kind: "completed"; decision: DecisionRecord; warnings: string[] };
+
 export type MessageIntentName =
 	| "archive_links"
 	| "ask_question"
+	| "make_decision"
+	| "query_decisions"
 	| "list_records"
 	| "delete_records"
 	| "server_status"

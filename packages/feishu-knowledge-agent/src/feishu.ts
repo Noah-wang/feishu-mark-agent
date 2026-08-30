@@ -1,5 +1,6 @@
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import type { Config } from "./config.js";
+import { buildDecisionBlocks } from "./decisionDoc.js";
 import {
 	BLOCK_HEADING2,
 	BLOCK_IMAGE,
@@ -12,7 +13,7 @@ import {
 	parseCategoryHeading,
 	summaryText,
 } from "./doc.js";
-import type { FeishuDocumentTextBlock, IncomingMessage, KnowledgeRecord } from "./types.js";
+import type { DecisionRecord, FeishuDocumentTextBlock, IncomingMessage, KnowledgeRecord } from "./types.js";
 
 export type FeishuCard = Record<string, unknown>;
 
@@ -258,6 +259,21 @@ export class FeishuClient {
 		);
 	}
 
+	/** Mirrors saved decisions into a separate document from the collected knowledge base. */
+	async syncDecisionDoc(decisions: DecisionRecord[]): Promise<void> {
+		if (!this.config.feishu.appId) return;
+		const documentId = await this.resolveDecisionDocumentId();
+		if (!documentId) return;
+		await this.clearDocument(documentId);
+		const blocks = buildDecisionBlocks(decisions);
+		for (let index = 0; index < blocks.length; index += DOC_BLOCK_CHUNK) {
+			await this.appendDocumentBlocks(documentId, blocks.slice(index, index + DOC_BLOCK_CHUNK));
+		}
+		console.info(
+			`Synced Feishu decision doc: document=${documentId} decisions=${decisions.length} blocks=${blocks.length}`,
+		);
+	}
+
 	async createKnowledgeDoc(title: string, folderToken: string): Promise<string> {
 		const body = await this.docApi("POST", "https://open.feishu.cn/open-apis/docx/v1/documents", {
 			title,
@@ -431,10 +447,18 @@ export class FeishuClient {
 	}
 
 	private async resolveConfiguredDocumentId(): Promise<string> {
-		if (this.config.feishu.docId) return this.config.feishu.docId;
-		if (!this.config.feishu.docUrl) return "";
-		const parsed = parseFeishuDocUrl(this.config.feishu.docUrl);
-		if (!parsed) return this.config.feishu.docUrl;
+		return this.resolveDocumentId(this.config.feishu.docId, this.config.feishu.docUrl);
+	}
+
+	private async resolveDecisionDocumentId(): Promise<string> {
+		return this.resolveDocumentId(this.config.feishu.decisionDocId, this.config.feishu.decisionDocUrl);
+	}
+
+	private async resolveDocumentId(configuredId: string, configuredUrl: string): Promise<string> {
+		if (configuredId) return configuredId;
+		if (!configuredUrl) return "";
+		const parsed = parseFeishuDocUrl(configuredUrl);
+		if (!parsed) return configuredUrl;
 		if (parsed.type === "docx") return parsed.token;
 		const body = await this.docApi(
 			"GET",

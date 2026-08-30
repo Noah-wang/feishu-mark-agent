@@ -23,6 +23,9 @@ export interface Config {
 		archiveReminderDelayMinutes: number;
 		archiveReminderCancelWindowMinutes: number;
 		archiveReminderSkipSourceChat: boolean;
+		decisionDocId: string;
+		decisionDocUrl: string;
+		decisionDocFolderToken: string;
 		bitableAppToken: string;
 		bitableTableId: string;
 		docId: string;
@@ -39,6 +42,16 @@ export interface Config {
 		apiKey: string;
 		model: string;
 		timeoutMs: number;
+	};
+	decision: {
+		maxSteps: number;
+		maxSources: number;
+		internalSearchLimit: number;
+		webSearchEnabled: boolean;
+		webSearchProvider: "brave" | "custom";
+		webSearchApiKey: string;
+		webSearchUrl: string;
+		webSearchTimeoutMs: number;
 	};
 	bilibili: {
 		transcriptCommand: string;
@@ -101,6 +114,9 @@ export async function loadConfig(): Promise<Config> {
 			archiveReminderDelayMinutes: envInt("FEISHU_ARCHIVE_REMINDER_DELAY_MINUTES", 5),
 			archiveReminderCancelWindowMinutes: envInt("FEISHU_ARCHIVE_REMINDER_CANCEL_WINDOW_MINUTES", 1),
 			archiveReminderSkipSourceChat: envBool("FEISHU_ARCHIVE_REMINDER_SKIP_SOURCE_CHAT", true),
+			decisionDocId: env("FEISHU_DECISION_DOC_ID"),
+			decisionDocUrl: env("FEISHU_DECISION_DOC_URL"),
+			decisionDocFolderToken: env("FEISHU_DECISION_DOC_FOLDER_TOKEN"),
 			bitableAppToken: env("FEISHU_BITABLE_APP_TOKEN"),
 			bitableTableId: env("FEISHU_BITABLE_TABLE_ID"),
 			docId: env("FEISHU_DOC_ID"),
@@ -127,6 +143,16 @@ export async function loadConfig(): Promise<Config> {
 			apiKey: env("MARK_LLM_API_KEY", env("THIRDPARTY_LLM_API_KEY", env("ARK_API_KEY", env("DOUBAO_API_KEY")))),
 			model: env("MARK_LLM_MODEL", env("THIRDPARTY_LLM_MODEL", env("ARK_MODEL", env("DOUBAO_TEXT_MODEL_ID")))),
 			timeoutMs: envInt("MARK_LLM_TIMEOUT_MS", 120000),
+		},
+		decision: {
+			maxSteps: clamp(envInt("MARK_DECISION_MAX_STEPS", 8), 3, 12),
+			maxSources: clamp(envInt("MARK_DECISION_MAX_SOURCES", 5), 1, 8),
+			internalSearchLimit: clamp(envInt("MARK_DECISION_INTERNAL_LIMIT", 5), 1, 10),
+			webSearchEnabled: envBool("MARK_WEB_SEARCH_ENABLED", true),
+			webSearchProvider: env("MARK_WEB_SEARCH_PROVIDER", "brave") === "custom" ? "custom" : "brave",
+			webSearchApiKey: env("MARK_WEB_SEARCH_API_KEY", env("BRAVE_SEARCH_API_KEY")),
+			webSearchUrl: env("MARK_WEB_SEARCH_URL", "https://api.search.brave.com/res/v1/web/search?q={query}"),
+			webSearchTimeoutMs: clamp(envInt("MARK_WEB_SEARCH_TIMEOUT_MS", 15000), 3000, 60000),
 		},
 		bilibili: {
 			transcriptCommand: env("BILIBILI_TRANSCRIPT_COMMAND"),
@@ -158,6 +184,10 @@ export async function loadConfig(): Promise<Config> {
 		xBearerToken: env("X_BEARER_TOKEN"),
 		dataDir,
 	};
+}
+
+function clamp(value: number, minimum: number, maximum: number) {
+	return Math.min(maximum, Math.max(minimum, value));
 }
 
 function envList(name: string, fallback: string) {
