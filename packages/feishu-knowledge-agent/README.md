@@ -11,6 +11,10 @@ Longer tasks use an interactive Feishu progress card. Mark sends one card immedi
 
 ## Recent Updates
 
+**2026-08-31:** Added Monid/TinyFish browser-rendered extraction for X/Twitter
+and dynamic web pages. Mark asks Monid for clean Markdown first, then falls back
+to the previous direct fetch or optional X API path when needed.
+
 **2026-08-30:** Added a general Decision Agent for product, operations, and technical
 choices. It searches internal records first, safely supplements them with public web
 research, reads the actual sources, compares candidates, and stores the conclusion for
@@ -71,7 +75,8 @@ Recommended:
 - `MARK_WEB_SEARCH_API_KEY`: Brave Search API key used by the Decision Agent. Without it,
   the Agent still compares internal records and reports that public research was unavailable.
 - `FEISHU_DECISION_DOC_ID` or `FEISHU_DECISION_DOC_URL`: separate Decision Center document.
-- `X_BEARER_TOKEN`: makes X/Twitter extraction reliable.
+- `MONID_API_KEY`: enables Monid/TinyFish browser extraction for X/Twitter and dynamic pages.
+- `X_BEARER_TOKEN`: optional X/Twitter API fallback.
 - `FEISHU_BITABLE_APP_TOKEN` and `FEISHU_BITABLE_TABLE_ID`: writes structured rows into Bitable.
 - `PI_AGENT_BINARY`: the Pi binary called for analysis. Defaults to `pi`.
 - `TENCENTCLOUD_SECRET_ID`, `TENCENTCLOUD_SECRET_KEY`, `TENCENTCLOUD_REGION`, and `TENCENTCLOUD_CVM_INSTANCE_ID`: enables Tencent Cloud CVM status and monitor metrics.

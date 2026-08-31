@@ -53,6 +53,15 @@ export interface Config {
 		webSearchUrl: string;
 		webSearchTimeoutMs: number;
 	};
+	monid: {
+		apiKey: string;
+		baseUrl: string;
+		provider: string;
+		endpoint: string;
+		maxAgeMs: number;
+		waitForMs: number;
+		timeoutMs: number;
+	};
 	bilibili: {
 		transcriptCommand: string;
 		configFile: string;
@@ -153,6 +162,15 @@ export async function loadConfig(): Promise<Config> {
 			webSearchApiKey: env("MARK_WEB_SEARCH_API_KEY", env("BRAVE_SEARCH_API_KEY")),
 			webSearchUrl: env("MARK_WEB_SEARCH_URL", "https://api.search.brave.com/res/v1/web/search?q={query}"),
 			webSearchTimeoutMs: clamp(envInt("MARK_WEB_SEARCH_TIMEOUT_MS", 15000), 3000, 60000),
+		},
+		monid: {
+			apiKey: env("MONID_API_KEY"),
+			baseUrl: env("MONID_BASE_URL", "https://api.monid.ai"),
+			provider: env("MONID_PROVIDER", "context.dev"),
+			endpoint: env("MONID_ENDPOINT", "/web/scrape/markdown"),
+			maxAgeMs: clamp(envInt("MONID_MAX_AGE_MS", 86400000), 0, 604800000),
+			waitForMs: clamp(envInt("MONID_WAIT_FOR_MS", 3000), 0, 30000),
+			timeoutMs: clamp(envInt("MONID_TIMEOUT_MS", 120000), 5000, 300000),
 		},
 		bilibili: {
 			transcriptCommand: env("BILIBILI_TRANSCRIPT_COMMAND"),
