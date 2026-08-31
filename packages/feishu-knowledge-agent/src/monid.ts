@@ -1,10 +1,5 @@
 import type { Config } from "./config.js";
-
-export interface MonidPage {
-	markdown: string;
-	metadata: Record<string, unknown>;
-	price?: unknown;
-}
+import type { WebSearchResult } from "./webSearch.js";
 
 type FetchLike = typeof fetch;
 
@@ -13,39 +8,36 @@ type MonidRunResponse = {
 	runId?: string;
 	status?: string;
 	output?: {
-		markdown?: unknown;
-		metadata?: unknown;
+		results?: unknown;
 	};
+	providerResponse?: { httpStatus?: unknown; error?: unknown };
 	error?: unknown;
 	price?: unknown;
 };
 
 const TERMINAL_STATUSES = new Set(["COMPLETED", "FAILED", "BLOCKED", "STOPPED", "TIMED_OUT"]);
 
-export async function fetchMonidPage(url: string, config: Config, fetchImpl: FetchLike = fetch): Promise<MonidPage> {
-	if (!config.monid.apiKey) throw new Error("Monid needs MONID_API_KEY");
+export async function searchMonidWeb(query: string, config: Config, fetchImpl: FetchLike = fetch): Promise<WebSearchResult[]> {
+	if (!config.decision.webSearchApiKey) throw new Error("Monid search needs MONID_API_KEY");
 
-	const baseUrl = config.monid.baseUrl.replace(/\/+$/, "");
+	const baseUrl = config.decision.monidBaseUrl.replace(/\/+$/, "");
 	const controller = new AbortController();
-	const timer = setTimeout(() => controller.abort(), config.monid.timeoutMs);
+	const timer = setTimeout(() => controller.abort(), config.decision.webSearchTimeoutMs);
 	try {
 		const response = await fetchImpl(`${baseUrl}/v1/run`, {
 			method: "POST",
 			headers: {
-				Authorization: `Bearer ${config.monid.apiKey}`,
+				Authorization: `Bearer ${config.decision.webSearchApiKey}`,
 				"Content-Type": "application/json",
 			},
 			body: JSON.stringify({
-				provider: config.monid.provider,
-				endpoint: config.monid.endpoint,
+				provider: config.decision.monidProvider,
+				endpoint: config.decision.monidEndpoint,
 				input: {
-					queryParams: {
-						url,
-						includeLinks: true,
-						includeImages: true,
-						useMainContentOnly: true,
-						maxAgeMs: config.monid.maxAgeMs,
-						waitForMs: config.monid.waitForMs,
+					body: {
+						query,
+						numResults: clamp(config.decision.maxSources * 2, 10, 20),
+						markdownOptions: { enabled: false },
 					},
 				},
 			}),
@@ -58,7 +50,7 @@ export async function fetchMonidPage(url: string, config: Config, fetchImpl: Fet
 
 		const body = (await response.json()) as MonidRunResponse;
 		const finalBody = response.status === 202 ? await pollMonidRun(baseUrl, body, config, fetchImpl, controller.signal) : body;
-		return parseMonidPage(finalBody);
+		return parseMonidResults(finalBody);
 	} finally {
 		clearTimeout(timer);
 	}
@@ -76,9 +68,9 @@ async function pollMonidRun(
 
 	let current = body;
 	while (!TERMINAL_STATUSES.has(String(current.status ?? "").toUpperCase())) {
-		await delay(Math.min(2000, Math.max(250, config.monid.waitForMs || 1000)));
+		await delay(1000);
 		const response = await fetchImpl(`${baseUrl}/v1/runs/${encodeURIComponent(runId)}`, {
-			headers: { Authorization: `Bearer ${config.monid.apiKey}` },
+			headers: { Authorization: `Bearer ${config.decision.webSearchApiKey}` },
 			signal,
 		});
 		if (!response.ok) throw new Error(`Monid run poll failed: HTTP ${response.status} ${await response.text()}`);
@@ -88,20 +80,29 @@ async function pollMonidRun(
 	return current;
 }
 
-function parseMonidPage(body: MonidRunResponse): MonidPage {
+function parseMonidResults(body: MonidRunResponse): WebSearchResult[] {
 	if (String(body.status ?? "COMPLETED").toUpperCase() !== "COMPLETED") {
 		throw new Error(`Monid run did not complete: ${body.status ?? "unknown"}`);
 	}
-	const markdown = typeof body.output?.markdown === "string" ? body.output.markdown.trim() : "";
-	if (!markdown) throw new Error("Monid returned empty markdown");
-	const metadata = isRecord(body.output?.metadata) ? body.output.metadata : {};
-	return { markdown, metadata, price: body.price };
+	const providerStatus = Number(body.providerResponse?.httpStatus ?? 200);
+	if (providerStatus >= 400) throw new Error(`Monid provider failed: HTTP ${providerStatus}`);
+	const raw = Array.isArray(body.output?.results) ? body.output.results : [];
+	return raw
+		.map((item) => {
+			const value = (item ?? {}) as Record<string, unknown>;
+			return {
+				title: String(value.title ?? "").trim(),
+				url: String(value.url ?? "").trim(),
+				snippet: String(value.description ?? value.snippet ?? value.content ?? "").trim(),
+			};
+		})
+		.filter((result) => result.title && result.url);
 }
 
 function delay(ms: number) {
 	return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return !!value && typeof value === "object" && !Array.isArray(value);
+function clamp(value: number, minimum: number, maximum: number) {
+	return Math.min(maximum, Math.max(minimum, value));
 }

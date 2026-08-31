@@ -48,19 +48,13 @@ export interface Config {
 		maxSources: number;
 		internalSearchLimit: number;
 		webSearchEnabled: boolean;
-		webSearchProvider: "brave" | "custom";
+		webSearchProvider: "brave" | "custom" | "monid";
 		webSearchApiKey: string;
 		webSearchUrl: string;
 		webSearchTimeoutMs: number;
-	};
-	monid: {
-		apiKey: string;
-		baseUrl: string;
-		provider: string;
-		endpoint: string;
-		maxAgeMs: number;
-		waitForMs: number;
-		timeoutMs: number;
+		monidBaseUrl: string;
+		monidProvider: string;
+		monidEndpoint: string;
 	};
 	bilibili: {
 		transcriptCommand: string;
@@ -110,6 +104,11 @@ export async function loadConfig(): Promise<Config> {
 	// absolute KNOWLEDGE_DATA_DIR still wins, because resolve returns it unchanged.
 	const dataDir = resolve(PACKAGE_DIR, env("KNOWLEDGE_DATA_DIR", ".knowledge"));
 	await mkdir(dataDir, { recursive: true });
+	const webSearchProvider = parseWebSearchProvider(env("MARK_WEB_SEARCH_PROVIDER", env("MONID_API_KEY") ? "monid" : "brave"));
+	const webSearchApiKey =
+		webSearchProvider === "monid"
+			? env("MARK_WEB_SEARCH_API_KEY", env("MONID_API_KEY"))
+			: env("MARK_WEB_SEARCH_API_KEY", env("BRAVE_SEARCH_API_KEY"));
 
 	return {
 		port: envInt("PORT", 8788),
@@ -158,19 +157,13 @@ export async function loadConfig(): Promise<Config> {
 			maxSources: clamp(envInt("MARK_DECISION_MAX_SOURCES", 5), 1, 8),
 			internalSearchLimit: clamp(envInt("MARK_DECISION_INTERNAL_LIMIT", 5), 1, 10),
 			webSearchEnabled: envBool("MARK_WEB_SEARCH_ENABLED", true),
-			webSearchProvider: env("MARK_WEB_SEARCH_PROVIDER", "brave") === "custom" ? "custom" : "brave",
-			webSearchApiKey: env("MARK_WEB_SEARCH_API_KEY", env("BRAVE_SEARCH_API_KEY")),
+			webSearchProvider,
+			webSearchApiKey,
 			webSearchUrl: env("MARK_WEB_SEARCH_URL", "https://api.search.brave.com/res/v1/web/search?q={query}"),
 			webSearchTimeoutMs: clamp(envInt("MARK_WEB_SEARCH_TIMEOUT_MS", 15000), 3000, 60000),
-		},
-		monid: {
-			apiKey: env("MONID_API_KEY"),
-			baseUrl: env("MONID_BASE_URL", "https://api.monid.ai"),
-			provider: env("MONID_PROVIDER", "context.dev"),
-			endpoint: env("MONID_ENDPOINT", "/web/scrape/markdown"),
-			maxAgeMs: clamp(envInt("MONID_MAX_AGE_MS", 86400000), 0, 604800000),
-			waitForMs: clamp(envInt("MONID_WAIT_FOR_MS", 3000), 0, 30000),
-			timeoutMs: clamp(envInt("MONID_TIMEOUT_MS", 120000), 5000, 300000),
+			monidBaseUrl: env("MONID_BASE_URL", "https://api.monid.ai"),
+			monidProvider: env("MONID_SEARCH_PROVIDER", "context.dev"),
+			monidEndpoint: env("MONID_SEARCH_ENDPOINT", "/web/search"),
 		},
 		bilibili: {
 			transcriptCommand: env("BILIBILI_TRANSCRIPT_COMMAND"),
@@ -206,6 +199,11 @@ export async function loadConfig(): Promise<Config> {
 
 function clamp(value: number, minimum: number, maximum: number) {
 	return Math.min(maximum, Math.max(minimum, value));
+}
+
+function parseWebSearchProvider(value: string): Config["decision"]["webSearchProvider"] {
+	if (value === "custom" || value === "monid") return value;
+	return "brave";
 }
 
 function envList(name: string, fallback: string) {

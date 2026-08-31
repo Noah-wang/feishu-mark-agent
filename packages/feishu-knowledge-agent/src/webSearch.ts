@@ -1,4 +1,5 @@
 import type { Config } from "./config.js";
+import { searchMonidWeb } from "./monid.js";
 
 export interface WebSearchResult {
 	title: string;
@@ -39,8 +40,14 @@ export async function searchWeb(
 	if (config.decision.webSearchProvider === "brave" && !config.decision.webSearchApiKey) {
 		throw new Error("Web search needs MARK_WEB_SEARCH_API_KEY");
 	}
+	if (config.decision.webSearchProvider === "monid" && !config.decision.webSearchApiKey) {
+		throw new Error("Monid search needs MONID_API_KEY");
+	}
 	const publicQuery = sanitizePublicSearchQuery(query);
 	if (!publicQuery) return [];
+	if (config.decision.webSearchProvider === "monid") {
+		return dedupeResults(await searchMonidWeb(publicQuery, config, fetchImpl)).slice(0, config.decision.maxSources * 2);
+	}
 
 	const endpoint = config.decision.webSearchUrl.replace("{query}", encodeURIComponent(publicQuery));
 	const controller = new AbortController();

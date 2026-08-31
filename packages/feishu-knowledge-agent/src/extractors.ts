@@ -1,7 +1,6 @@
 import { spawn } from "node:child_process";
 import { type BilibiliVideoInfo, fetchBilibiliSubtitle } from "./bilibili.js";
 import type { Config } from "./config.js";
-import { fetchMonidPage } from "./monid.js";
 import type { ExtractedContent } from "./types.js";
 import { classifyUrl, parseBilibiliId, parseGithubRepo, parseTweetId } from "./url.js";
 
@@ -10,18 +9,11 @@ export async function extractContent(url: string, config: Config): Promise<Extra
 	if (sourceType === "x") return extractXPost(url, config);
 	if (sourceType === "github") return extractGithub(url);
 	if (sourceType === "bilibili" || sourceType === "video") return extractBilibiliOrVideo(url, config);
-	return extractArticle(url, config);
+	return extractArticle(url);
 }
 
 async function extractXPost(url: string, config: Config): Promise<ExtractedContent> {
 	const tweetId = parseTweetId(url);
-	if (config.monid.apiKey) {
-		try {
-			return await extractWithMonid(url, config, "x");
-		} catch (error) {
-			console.warn("Monid X extraction failed", error);
-		}
-	}
 	if (tweetId && config.xBearerToken) {
 		const apiUrl = new URL(`https://api.x.com/2/tweets/${tweetId}`);
 		apiUrl.searchParams.set("tweet.fields", "created_at,public_metrics,entities,attachments");
@@ -49,21 +41,17 @@ async function extractXPost(url: string, config: Config): Promise<ExtractedConte
 		}
 	}
 
-	const article = await extractPlainArticle(url);
+	const article = await extractArticle(url);
 	return {
 		...article,
 		sourceType: "x",
-		metadata: {
-			...article.metadata,
-			tweetId,
-			extractionWarning: "Set MONID_API_KEY or X_BEARER_TOKEN for reliable X extraction.",
-		},
+		metadata: { ...article.metadata, tweetId, extractionWarning: "Set X_BEARER_TOKEN for reliable X extraction." },
 	};
 }
 
 async function extractGithub(url: string): Promise<ExtractedContent> {
 	const repo = parseGithubRepo(url);
-	if (!repo) return extractPlainArticle(url);
+	if (!repo) return extractArticle(url);
 
 	const headers = { "User-Agent": "myPiAgent-feishu-knowledge-agent" };
 	const [repoRes, readmeRes] = await Promise.all([
@@ -193,7 +181,7 @@ async function bilibiliPageFallback(
 	reason: string,
 	videoId: string | undefined,
 ): Promise<ExtractedContent> {
-	const article = await extractPlainArticle(url);
+	const article = await extractArticle(url);
 	return {
 		...article,
 		sourceType: "bilibili",
@@ -229,38 +217,7 @@ async function resolveBilibiliVideoId(url: string): Promise<string | undefined> 
 	}
 }
 
-async function extractArticle(url: string, config?: Config): Promise<ExtractedContent> {
-	if (config?.monid.apiKey) {
-		try {
-			return await extractWithMonid(url, config, classifyUrl(url));
-		} catch (error) {
-			console.warn("Monid article extraction failed", error);
-		}
-	}
-	return extractPlainArticle(url);
-}
-
-async function extractWithMonid(url: string, config: Config, sourceType: ExtractedContent["sourceType"]): Promise<ExtractedContent> {
-	const page = await fetchMonidPage(url, config);
-	const metadataTitle = typeof page.metadata.title === "string" ? page.metadata.title.trim() : "";
-	const metadataImage = typeof page.metadata.image === "string" ? page.metadata.image.trim() : "";
-	return {
-		url,
-		sourceType,
-		title: decodeHtml(metadataTitle || titleFromMarkdown(page.markdown) || url),
-		text: page.markdown.slice(0, 40000),
-		images: metadataImage ? [metadataImage] : [],
-		metadata: {
-			...page.metadata,
-			extractor: "monid-context.dev",
-			monidProvider: config.monid.provider,
-			monidEndpoint: config.monid.endpoint,
-			monidPrice: page.price,
-		},
-	};
-}
-
-async function extractPlainArticle(url: string): Promise<ExtractedContent> {
+async function extractArticle(url: string): Promise<ExtractedContent> {
 	const response = await fetch(url, { headers: { "User-Agent": "myPiAgent-feishu-knowledge-agent" } });
 	const html = await response.text();
 	const title = pickMeta(html, "og:title") ?? pickTag(html, "title") ?? url;
@@ -274,10 +231,6 @@ async function extractPlainArticle(url: string): Promise<ExtractedContent> {
 		images: image ? [image] : [],
 		metadata: { status: response.status, contentType: response.headers.get("content-type") },
 	};
-}
-
-function titleFromMarkdown(markdown: string) {
-	return markdown.match(/^#\s+(.+)$/m)?.[1]?.trim();
 }
 
 /**

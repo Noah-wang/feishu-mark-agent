@@ -23,9 +23,9 @@
 
 ## 最新更新
 
-**2026-08-31：Monid/TinyFish 浏览器抓取。** Mark 现在可以通过 Monid 的 TinyFish
-浏览器抓取能力读取 X/Twitter 和动态网页，把页面转成干净 Markdown 后再分析。X 官方 API
-仍可作为可选兜底；真实 `MONID_API_KEY` 只应放在服务器环境变量里。
+**2026-08-31：Monid/TinyFish 联网搜索。** Mark 的决策 Agent 现在可以用 Monid
+搜索公开网页来发现候选方案；链接收录仍走原来的 GitHub、B 站、X API 和网页读取链路。
+真实 `MONID_API_KEY` 只应放在服务器环境变量里。
 
 **2026-08-30：通用决策 Agent。** Mark 现在能处理产品、运营和技术选型：先检索团队资料，
 再用脱敏查询自动联网补充，深入读取候选来源后给出带证据的推荐、备选、风险和下一步。
@@ -75,8 +75,8 @@ Mark 检索资料库，给出带取舍分析的回答，只引用团队实际收
 |---|---|
 | GitHub | 仓库 API + README，含 star 数、语言、许可证 |
 | B 站 | 通过 B 站 web 接口拿中文字幕，含 AI 生成的字幕轨 |
-| X / Twitter | Monid/TinyFish 浏览器抓取，X API 可选兜底 |
-| 文章网页 | Monid/TinyFish 浏览器抓取，Open Graph 元信息可选兜底 |
+| X / Twitter | 通过 X API 拿正文、作者、媒体和互动数据 |
+| 文章网页 | Open Graph 元信息 + 正文文本 |
 
 B 站有时会返回一条**属于完全无关视频的字幕轨**，而且每次请求返回的内容还不一样。
 Mark 会丢弃密度低于 10 行每分钟、或最后一句时间戳落在视频前半段的字幕轨，改为归档
@@ -150,16 +150,16 @@ npm --workspace=packages/feishu-knowledge-agent run decision-doc:create
 | `FEISHU_ENCRYPT_KEY` | 开启请求签名校验 |
 | `FEISHU_DOC_ID` 或 `FEISHU_DOC_URL` | 可翻阅的资料库文档 |
 | `MARK_LLM_BASE_URL` · `MARK_LLM_API_KEY` · `MARK_LLM_MODEL` | OpenAI 兼容接口，用于摘要和问答 |
-| `MARK_WEB_SEARCH_API_KEY` | Brave Search API key，用于决策 Agent 自动联网研究 |
+| `MONID_API_KEY` | Monid/TinyFish 搜索，用于决策 Agent 自动发现候选来源 |
 | `FEISHU_DECISION_DOC_ID` 或 `FEISHU_DECISION_DOC_URL` | 独立的 Mark 决策中心文档 |
-| `MONID_API_KEY` | Monid/TinyFish 浏览器抓取，用于 X 和动态网页 |
 
 **可选集成**
 
 | 变量 | 用途 |
 |---|---|
 | `BILIBILI_SESSDATA` · `BILIBILI_BILI_JCT` · `BILIBILI_BUVID3` | B 站字幕访问 |
-| `X_BEARER_TOKEN` | X/Twitter 官方 API 兜底 |
+| `X_BEARER_TOKEN` | 让 X/Twitter 抽取更可靠 |
+| `MARK_WEB_SEARCH_API_KEY` | Brave Search 或自定义搜索服务的 API key |
 | `FEISHU_BITABLE_APP_TOKEN` · `FEISHU_BITABLE_TABLE_ID` | 同步结构化多维表格 |
 | `FEISHU_ARCHIVE_REMINDER_CHAT_ID` | 收录后延迟提醒指定飞书群 |
 | `TENCENTCLOUD_SECRET_ID` · `TENCENTCLOUD_SECRET_KEY` | 腾讯云 CVM 状态和监控指标 |

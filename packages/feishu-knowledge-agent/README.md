@@ -11,9 +11,9 @@ Longer tasks use an interactive Feishu progress card. Mark sends one card immedi
 
 ## Recent Updates
 
-**2026-08-31:** Added Monid/TinyFish browser-rendered extraction for X/Twitter
-and dynamic web pages. Mark asks Monid for clean Markdown first, then falls back
-to the previous direct fetch or optional X API path when needed.
+**2026-08-31:** Added Monid/TinyFish as a public web search provider for the
+Decision Agent. Link archiving still uses the existing GitHub, Bilibili, X API,
+and article extraction path.
 
 **2026-08-30:** Added a general Decision Agent for product, operations, and technical
 choices. It searches internal records first, safely supplements them with public web
@@ -72,11 +72,12 @@ Recommended:
 
 - `FEISHU_ENCRYPT_KEY`: enables Feishu signature verification.
 - `MARK_LLM_BASE_URL`, `MARK_LLM_API_KEY`, and `MARK_LLM_MODEL`: OpenAI-compatible LLM used for link analysis and recommendation answers. Mark tries this before Pi Agent.
-- `MARK_WEB_SEARCH_API_KEY`: Brave Search API key used by the Decision Agent. Without it,
-  the Agent still compares internal records and reports that public research was unavailable.
+- `MONID_API_KEY`: Monid/TinyFish search key used by the Decision Agent. Without it,
+  the Agent can still compare internal records, or use Brave/custom search if configured.
 - `FEISHU_DECISION_DOC_ID` or `FEISHU_DECISION_DOC_URL`: separate Decision Center document.
-- `MONID_API_KEY`: enables Monid/TinyFish browser extraction for X/Twitter and dynamic pages.
-- `X_BEARER_TOKEN`: optional X/Twitter API fallback.
+- `X_BEARER_TOKEN`: makes X/Twitter extraction reliable.
+- `MARK_WEB_SEARCH_API_KEY`: Brave/custom search API key when `MARK_WEB_SEARCH_PROVIDER`
+  is not `monid`.
 - `FEISHU_BITABLE_APP_TOKEN` and `FEISHU_BITABLE_TABLE_ID`: writes structured rows into Bitable.
 - `PI_AGENT_BINARY`: the Pi binary called for analysis. Defaults to `pi`.
 - `TENCENTCLOUD_SECRET_ID`, `TENCENTCLOUD_SECRET_KEY`, `TENCENTCLOUD_REGION`, and `TENCENTCLOUD_CVM_INSTANCE_ID`: enables Tencent Cloud CVM status and monitor metrics.
@@ -102,7 +103,14 @@ agent instead of the normal archive Q&A path. The agent:
 5. Compares two to five candidates with `met`, `partial`, `not_met`, and `unknown` conditions.
 6. Saves the decision and its evidence to `.knowledge/decisions.json`.
 
-External search uses the official Brave Search API by default. Configure:
+External search uses Monid/TinyFish when `MONID_API_KEY` is configured. Configure:
+
+```bash
+MARK_WEB_SEARCH_PROVIDER=monid
+MONID_API_KEY=xxx
+```
+
+Brave Search is still supported:
 
 ```bash
 MARK_WEB_SEARCH_ENABLED=true

@@ -66,3 +66,32 @@ test("searchWeb sends Brave authentication and reads web results", async () => {
 	const results = await searchWeb("API service", braveConfig, fetchImpl);
 	assert.deepEqual(results, [{ title: "Official docs", url: "https://example.com/docs", snippet: "API reference" }]);
 });
+
+test("searchWeb can use Monid as the web search provider", async () => {
+	const monidConfig = {
+		decision: {
+			webSearchEnabled: true,
+			webSearchProvider: "monid",
+			webSearchApiKey: "test-key",
+			webSearchUrl: "",
+			webSearchTimeoutMs: 1000,
+			maxSources: 5,
+			monidBaseUrl: "https://api.monid.test",
+			monidProvider: "context.dev",
+			monidEndpoint: "/web/search",
+		},
+	};
+	const fetchImpl = async () =>
+		new Response(
+			JSON.stringify({
+				status: "COMPLETED",
+				output: {
+					results: [{ title: "Monid result", url: "https://example.com/monid", description: "Search result" }],
+				},
+				providerResponse: { httpStatus: 200 },
+			}),
+			{ headers: { "content-type": "application/json" } },
+		);
+	const results = await searchWeb("API service", monidConfig, fetchImpl);
+	assert.deepEqual(results, [{ title: "Monid result", url: "https://example.com/monid", snippet: "Search result" }]);
+});
