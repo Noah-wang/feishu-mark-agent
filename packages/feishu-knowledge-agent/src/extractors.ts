@@ -2,7 +2,15 @@ import { spawn } from "node:child_process";
 import { type BilibiliVideoInfo, fetchBilibiliSubtitle } from "./bilibili.js";
 import type { Config } from "./config.js";
 import type { ExtractedContent } from "./types.js";
-import { classifyUrl, parseBilibiliId, parseGithubRepo, parseTweetId, parseYoutubeVideoId } from "./url.js";
+import {
+	canonicalBilibiliUrl,
+	canonicalYoutubeUrl,
+	classifyUrl,
+	parseBilibiliId,
+	parseGithubRepo,
+	parseTweetId,
+	parseYoutubeVideoId,
+} from "./url.js";
 import { fetchYoutubeSubtitle, type YoutubeVideoInfo } from "./youtube.js";
 
 export async function extractContent(url: string, config: Config): Promise<ExtractedContent> {
@@ -131,7 +139,7 @@ async function extractBilibiliOrVideo(url: string, config: Config): Promise<Extr
 
 	if (extraction.kind === "subtitle") {
 		return {
-			url,
+			url: canonicalBilibiliUrl(info.videoId),
 			sourceType: "bilibili",
 			title: info.title,
 			text: withPartOnlyNotice(info, extraction.text),
@@ -148,7 +156,7 @@ async function extractBilibiliOrVideo(url: string, config: Config): Promise<Extr
 	// The video page is behind anti-bot checks for some videos and returns a 252-byte
 	// error page, so build the fallback from the API metadata we already hold.
 	return {
-		url,
+		url: canonicalBilibiliUrl(info.videoId),
 		sourceType: "bilibili",
 		title: info.title,
 		text: withNoSubtitleNotice(extraction.reason, describeVideo(info)),
@@ -194,7 +202,7 @@ async function extractYoutube(url: string, config: Config): Promise<ExtractedCon
 
 	if (extraction.kind === "subtitle") {
 		return {
-			url,
+			url: canonicalYoutubeUrl(info.videoId),
 			sourceType: "youtube",
 			title: info.title,
 			text: extraction.text,
@@ -213,7 +221,7 @@ async function extractYoutube(url: string, config: Config): Promise<ExtractedCon
 	}
 
 	return {
-		url,
+		url: canonicalYoutubeUrl(info.videoId),
 		sourceType: "youtube",
 		title: info.title,
 		text: withNoSubtitleNotice(extraction.reason, describeYoutubeVideo(info)),

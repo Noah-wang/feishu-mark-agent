@@ -76,3 +76,19 @@ function safeUrl(url: string) {
 		return undefined;
 	}
 }
+
+/**
+ * Short links defeat the store's URL-based deduplication: b23.tv/uTRT1O1 and
+ * b23.tv/Prp34ye both point at BV1z9t86dEc2, and both were archived as separate
+ * records. Storing the canonical form makes the same video the same URL, and it
+ * also outlives short links, which expire.
+ */
+export function canonicalBilibiliUrl(videoId: string) {
+	return /^BV/i.test(videoId)
+		? `https://www.bilibili.com/video/${videoId}/`
+		: `https://www.bilibili.com/video/av${videoId}/`;
+}
+
+export function canonicalYoutubeUrl(videoId: string) {
+	return `https://www.youtube.com/watch?v=${videoId}`;
+}
