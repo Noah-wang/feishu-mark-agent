@@ -168,7 +168,16 @@ export type MessageIntentName =
 	| "server_status"
 	| "help";
 
-export type AgentActionName = MessageIntentName | "translate_records" | "clarify";
+export type AgentActionName = MessageIntentName | "translate_records" | "clarify" | "add_recommendation";
+
+/**
+ * Describes an archive that just happened, so the planner can tell a comment about
+ * it apart from a fresh request. Only set while the recommendation window is open.
+ */
+export interface RecentArchiveContext {
+	titles: string[];
+	windowMinutes: number;
+}
 
 export interface MessageIntent {
 	intent: MessageIntentName;

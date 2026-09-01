@@ -19,6 +19,7 @@ import type {
 	DecisionRecord,
 	FeishuDocumentTextBlock,
 	KnowledgeRecord,
+	RecentArchiveContext,
 	Recommendation,
 	RequirementPoint,
 } from "./types.js";
@@ -124,6 +125,13 @@ function rememberRecommendationWindow(chatId: string, senderId: string, records:
 	});
 }
 
+/** Read without consuming, so the planner can see the context before deciding. */
+function peekRecommendationWindow(chatId: string, senderId: string, config: Config): RecentArchiveContext | undefined {
+	const pending = pendingRecommendations.get(chatId);
+	if (!pending || pending.expiresAt <= Date.now() || pending.senderId !== senderId) return undefined;
+	return { titles: pending.titles, windowMinutes: config.feishu.recommendationWindowMinutes };
+}
+
 function takeRecommendationWindow(chatId: string, senderId: string): PendingRecommendation | undefined {
 	const pending = pendingRecommendations.get(chatId);
 	if (!pending) return undefined;
@@ -135,25 +143,6 @@ function takeRecommendationWindow(chatId: string, senderId: string): PendingReco
 	if (pending.senderId !== senderId) return undefined;
 	pendingRecommendations.delete(chatId);
 	return pending;
-}
-
-/** Commands aimed at Mark itself, which read as prose but are not a reason for sharing. */
-const MARK_COMMAND_PATTERN =
-	/(服务器状态|服务器负载|服务器还好|查.{0,3}服务器|看.{0,3}服务器|列出|列表|有哪些|删除|删掉|移除|改成中文|翻译一下|使用说明|怎么用|帮助|^help$)/i;
-
-/**
- * A follow-up is only a reason if it is prose about the thing just archived. Regex
- * cannot separate that from a command with certainty — telling them apart properly
- * would need the planner, and this runs before it deliberately to save a round trip.
- * So the check stays conservative and the reply offers an undo, which makes a wrong
- * guess a five-second fix instead of silent bad data.
- */
-function looksLikeRecommendation(text: string, urls: string[]) {
-	const trimmed = text.trim();
-	if (!trimmed || urls.length) return false;
-	if (trimmed.length > 500) return false;
-	if (isArchiveReminderCancelText(trimmed)) return false;
-	return !MARK_COMMAND_PATTERN.test(trimmed);
 }
 
 function isRecommendationUndoText(text: string) {
@@ -276,29 +265,6 @@ async function handleMessage(
 		await feishu.sendText(chatId, await undoLastRecommendation(store, feishu, chatId, senderId));
 		return;
 	}
-	// Checked before planning, because the reason is prose and the planner would
-	// otherwise route it somewhere as a fresh request.
-	if (looksLikeRecommendation(incomingText, extractUrls(incomingText))) {
-		const window = takeRecommendationWindow(chatId, senderId);
-		if (window) {
-			const saved = await attachRecommendation(store, window, incomingText.trim());
-			if (saved.length) {
-				lastRecommendations.set(chatId, {
-					recordIds: saved.map((record) => record.id),
-					titles: saved.map((record) => record.title),
-					senderId,
-					expiresAt: Date.now() + RECOMMENDATION_UNDO_TTL_MS,
-				});
-			}
-			await feishu.sendText(chatId, renderRecommendationSaved(saved, incomingText.trim()));
-			// These records are already in the document, so their blocks have to be
-			// replaced rather than appended: a rebuild is the only path that does that.
-			void feishu
-				.syncKnowledgeDoc(await store.list())
-				.catch((error) => console.error("Failed to sync Feishu knowledge doc after adding a reason", error));
-			return;
-		}
-	}
 	// A reply to a clarifying question carries no context on its own ("技术方案的建议"),
 	// so it is folded back into the request that prompted the question.
 	const pending = takePendingClarification(chatId);
@@ -317,8 +283,52 @@ async function handleMessage(
 			{ label: "处理任务", state: "pending" },
 			{ label: "整理结果", state: "pending" },
 		]);
-		const agentPlan = await planAgentAction(messageText, urls, config);
+		// The planner decides whether this is a reason or a request, with the titles of
+		// what was just archived in hand. A regex could not tell those apart.
+		const archiveContext = peekRecommendationWindow(chatId, senderId, config);
+		const agentPlan = await planAgentAction(messageText, urls, config, archiveContext);
 		console.info(`Planned Feishu agent action: ${agentPlan.action} reason=${agentPlan.reason}`);
+
+		if (agentPlan.action === "add_recommendation") {
+			const window = takeRecommendationWindow(chatId, senderId);
+			// The window can close between planning and acting, and only the person who
+			// archived may write the reason.
+			if (!window) {
+				await finishProgressCard(
+					feishu,
+					chatId,
+					progress,
+					"没有可关联的收录",
+					"我这边没有刚收录、还在等推荐理由的资料。你可以先发链接，收录完成后一分钟内回一句话。",
+					"yellow",
+				);
+				return;
+			}
+			const reason = agentPlan.query?.trim() || incomingText.trim();
+			const saved = await attachRecommendation(store, window, reason);
+			if (saved.length) {
+				lastRecommendations.set(chatId, {
+					recordIds: saved.map((record) => record.id),
+					titles: saved.map((record) => record.title),
+					senderId,
+					expiresAt: Date.now() + RECOMMENDATION_UNDO_TTL_MS,
+				});
+			}
+			await finishProgressCard(
+				feishu,
+				chatId,
+				progress,
+				"已记下推荐理由",
+				renderRecommendationSaved(saved, reason),
+				"green",
+			);
+			// These records already exist in the document, so their blocks have to be
+			// replaced rather than appended: a rebuild is the only path that does that.
+			void feishu
+				.syncKnowledgeDoc(await store.list())
+				.catch((error) => console.error("Failed to sync Feishu knowledge doc after adding a reason", error));
+			return;
+		}
 
 		// Clarifying twice in a row is the failure the user sees: they answer, and Mark
 		// asks again. One question is the budget; after that, act on what we have.
