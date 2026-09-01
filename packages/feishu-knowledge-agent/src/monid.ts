@@ -17,7 +17,11 @@ type MonidRunResponse = {
 
 const TERMINAL_STATUSES = new Set(["COMPLETED", "FAILED", "BLOCKED", "STOPPED", "TIMED_OUT"]);
 
-export async function searchMonidWeb(query: string, config: Config, fetchImpl: FetchLike = fetch): Promise<WebSearchResult[]> {
+export async function searchMonidWeb(
+	query: string,
+	config: Config,
+	fetchImpl: FetchLike = fetch,
+): Promise<WebSearchResult[]> {
 	if (!config.decision.webSearchApiKey) throw new Error("Monid search needs MONID_API_KEY");
 
 	const baseUrl = config.decision.monidBaseUrl.replace(/\/+$/, "");
@@ -49,7 +53,8 @@ export async function searchMonidWeb(query: string, config: Config, fetchImpl: F
 		}
 
 		const body = (await response.json()) as MonidRunResponse;
-		const finalBody = response.status === 202 ? await pollMonidRun(baseUrl, body, config, fetchImpl, controller.signal) : body;
+		const finalBody =
+			response.status === 202 ? await pollMonidRun(baseUrl, body, config, fetchImpl, controller.signal) : body;
 		return parseMonidResults(finalBody);
 	} finally {
 		clearTimeout(timer);

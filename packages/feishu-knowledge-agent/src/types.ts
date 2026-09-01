@@ -39,6 +39,8 @@ export interface KnowledgeRecord {
 	 * against the sender of a delete request.
 	 */
 	sharerId: string;
+	/** Why the sharer thinks this is worth reading. Their own words, not the model's. */
+	recommendation: string;
 	createdAt: string;
 	rawText: string;
 }

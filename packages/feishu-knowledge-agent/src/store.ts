@@ -150,6 +150,8 @@ function tokenize(text: string): string[] {
 
 const FIELD_WEIGHTS = [
 	{ weight: 6, pick: (record: KnowledgeRecord) => record.title },
+	// A human saying why something matters is a stronger signal than a generated summary.
+	{ weight: 5, pick: (record: KnowledgeRecord) => record.recommendation },
 	{ weight: 4, pick: (record: KnowledgeRecord) => `${record.category} ${record.tags.join(" ")}` },
 	{ weight: 3, pick: (record: KnowledgeRecord) => `${record.useCases.join(" ")} ${record.keyPoints.join(" ")}` },
 	{ weight: 2, pick: (record: KnowledgeRecord) => record.summary },
@@ -196,6 +198,7 @@ function renderMarkdown(records: KnowledgeRecord[]) {
 			lines.push(`- 来源类型：${SOURCE_TYPE_LABELS[record.sourceType] ?? record.sourceType}`);
 			lines.push(`- 标签：${record.tags.join("、") || "-"}`);
 			lines.push(`- 分享者：${readableSharer(record.sharer)}`);
+			if (record.recommendation) lines.push(`- 推荐理由：${record.recommendation}`);
 			lines.push(`- 适用场景：${record.useCases.join("；") || "-"}`);
 			lines.push(`- 摘要：${record.summary}`);
 			if (record.images.length) lines.push(`- 图片：${record.images.join(", ")}`);
@@ -235,6 +238,7 @@ function normalizeRecord(raw: Partial<KnowledgeRecord> | null | undefined): Know
 		// Records archived before ownership was tracked fall back to `sharer`, which held
 		// a raw open_id whenever the contact scope was missing.
 		sharerId: String(record.sharerId ?? (isOpenId(record.sharer) ? record.sharer : "")),
+		recommendation: String(record.recommendation ?? ""),
 	};
 }
 

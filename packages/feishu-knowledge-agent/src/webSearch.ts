@@ -46,7 +46,10 @@ export async function searchWeb(
 	const publicQuery = sanitizePublicSearchQuery(query);
 	if (!publicQuery) return [];
 	if (config.decision.webSearchProvider === "monid") {
-		return dedupeResults(await searchMonidWeb(publicQuery, config, fetchImpl)).slice(0, config.decision.maxSources * 2);
+		return dedupeResults(await searchMonidWeb(publicQuery, config, fetchImpl)).slice(
+			0,
+			config.decision.maxSources * 2,
+		);
 	}
 
 	const endpoint = config.decision.webSearchUrl.replace("{query}", encodeURIComponent(publicQuery));

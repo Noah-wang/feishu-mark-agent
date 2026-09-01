@@ -79,6 +79,8 @@ export function buildRecordBlocks(record: KnowledgeRecord): DocBlock[] {
 	].filter(Boolean);
 	blocks.push(block(BLOCK_TEXT, "text", facts.join(" · ")));
 	blocks.push(block(BLOCK_TEXT, "text", `分享者：${readableSharer(record.sharer)}`));
+	// The sharer's own words carry more weight than the generated summary, so they sit above it.
+	if (record.recommendation) blocks.push(block(BLOCK_TEXT, "text", `推荐理由：${record.recommendation}`));
 	blocks.push(block(BLOCK_TEXT, "text", record.url));
 	if (record.summary) blocks.push(block(BLOCK_TEXT, "text", record.summary));
 	if (record.useCases.length) {

@@ -23,6 +23,8 @@ export interface Config {
 		archiveReminderDelayMinutes: number;
 		archiveReminderCancelWindowMinutes: number;
 		archiveReminderSkipSourceChat: boolean;
+		/** How long after archiving a plain follow-up counts as the sharer's reason. */
+		recommendationWindowMinutes: number;
 		decisionDocId: string;
 		decisionDocUrl: string;
 		decisionDocFolderToken: string;
@@ -132,6 +134,7 @@ export async function loadConfig(): Promise<Config> {
 			archiveReminderDelayMinutes: envInt("FEISHU_ARCHIVE_REMINDER_DELAY_MINUTES", 5),
 			archiveReminderCancelWindowMinutes: envInt("FEISHU_ARCHIVE_REMINDER_CANCEL_WINDOW_MINUTES", 1),
 			archiveReminderSkipSourceChat: envBool("FEISHU_ARCHIVE_REMINDER_SKIP_SOURCE_CHAT", true),
+			recommendationWindowMinutes: envInt("MARK_RECOMMENDATION_WINDOW_MINUTES", 1),
 			decisionDocId: env("FEISHU_DECISION_DOC_ID"),
 			decisionDocUrl: env("FEISHU_DECISION_DOC_URL"),
 			decisionDocFolderToken: env("FEISHU_DECISION_DOC_FOLDER_TOKEN"),

@@ -89,6 +89,77 @@ interface RecentDecisionContext {
  */
 const pendingClarifications = new Map<string, PendingClarification>();
 const CLARIFICATION_TTL_MS = 30 * 60 * 1000;
+interface PendingRecommendation {
+	recordIds: string[];
+	titles: string[];
+	senderId: string;
+	expiresAt: number;
+}
+
+/**
+ * Right after archiving, a plain follow-up from the same person is taken as their
+ * reason for sharing. The sharer's own words are the one thing the model cannot
+ * infer from the content, and asking for them later never works.
+ *
+ * Keyed by chat so two people archiving in the same chat cannot overwrite each
+ * other; the senderId check below enforces that.
+ */
+const pendingRecommendations = new Map<string, PendingRecommendation>();
+
+/** What the last saved reason was attached to, so a misread command can be undone. */
+const lastRecommendations = new Map<string, PendingRecommendation>();
+const RECOMMENDATION_UNDO_TTL_MS = 10 * 60 * 1000;
+
+function rememberRecommendationWindow(chatId: string, senderId: string, records: KnowledgeRecord[], config: Config) {
+	const minutes = config.feishu.recommendationWindowMinutes;
+	if (minutes <= 0 || !records.length) return;
+	for (const [key, value] of pendingRecommendations) {
+		if (value.expiresAt <= Date.now()) pendingRecommendations.delete(key);
+	}
+	pendingRecommendations.set(chatId, {
+		recordIds: records.map((record) => record.id),
+		titles: records.map((record) => record.title),
+		senderId,
+		expiresAt: Date.now() + minutes * 60 * 1000,
+	});
+}
+
+function takeRecommendationWindow(chatId: string, senderId: string): PendingRecommendation | undefined {
+	const pending = pendingRecommendations.get(chatId);
+	if (!pending) return undefined;
+	if (pending.expiresAt <= Date.now()) {
+		pendingRecommendations.delete(chatId);
+		return undefined;
+	}
+	// Someone else talking in the same chat must not have their message stolen.
+	if (pending.senderId !== senderId) return undefined;
+	pendingRecommendations.delete(chatId);
+	return pending;
+}
+
+/** Commands aimed at Mark itself, which read as prose but are not a reason for sharing. */
+const MARK_COMMAND_PATTERN =
+	/(服务器状态|服务器负载|服务器还好|查.{0,3}服务器|看.{0,3}服务器|列出|列表|有哪些|删除|删掉|移除|改成中文|翻译一下|使用说明|怎么用|帮助|^help$)/i;
+
+/**
+ * A follow-up is only a reason if it is prose about the thing just archived. Regex
+ * cannot separate that from a command with certainty — telling them apart properly
+ * would need the planner, and this runs before it deliberately to save a round trip.
+ * So the check stays conservative and the reply offers an undo, which makes a wrong
+ * guess a five-second fix instead of silent bad data.
+ */
+function looksLikeRecommendation(text: string, urls: string[]) {
+	const trimmed = text.trim();
+	if (!trimmed || urls.length) return false;
+	if (trimmed.length > 500) return false;
+	if (isArchiveReminderCancelText(trimmed)) return false;
+	return !MARK_COMMAND_PATTERN.test(trimmed);
+}
+
+function isRecommendationUndoText(text: string) {
+	return /^(不是理由|撤销理由|取消理由|删掉理由|记错了)$/i.test(text.trim());
+}
+
 const scheduledArchiveReminders = new Map<string, ScheduledArchiveReminder>();
 const recentDecisionContexts = new Map<string, RecentDecisionContext>();
 const DECISION_CONTEXT_TTL_MS = 60 * 60 * 1000;
@@ -200,6 +271,33 @@ async function handleMessage(
 	if (isArchiveReminderCancelText(incomingText)) {
 		await cancelLatestArchiveReminder(chatId, senderId, feishu);
 		return;
+	}
+	if (isRecommendationUndoText(incomingText)) {
+		await feishu.sendText(chatId, await undoLastRecommendation(store, feishu, chatId, senderId));
+		return;
+	}
+	// Checked before planning, because the reason is prose and the planner would
+	// otherwise route it somewhere as a fresh request.
+	if (looksLikeRecommendation(incomingText, extractUrls(incomingText))) {
+		const window = takeRecommendationWindow(chatId, senderId);
+		if (window) {
+			const saved = await attachRecommendation(store, window, incomingText.trim());
+			if (saved.length) {
+				lastRecommendations.set(chatId, {
+					recordIds: saved.map((record) => record.id),
+					titles: saved.map((record) => record.title),
+					senderId,
+					expiresAt: Date.now() + RECOMMENDATION_UNDO_TTL_MS,
+				});
+			}
+			await feishu.sendText(chatId, renderRecommendationSaved(saved, incomingText.trim()));
+			// These records are already in the document, so their blocks have to be
+			// replaced rather than appended: a rebuild is the only path that does that.
+			void feishu
+				.syncKnowledgeDoc(await store.list())
+				.catch((error) => console.error("Failed to sync Feishu knowledge doc after adding a reason", error));
+			return;
+		}
 	}
 	// A reply to a clarifying question carries no context on its own ("技术方案的建议"),
 	// so it is folded back into the request that prompted the question.
@@ -525,6 +623,8 @@ async function handleMessage(
 					...analyzed,
 					sharer: sharer || senderId || "unknown",
 					sharerId: senderId,
+					// Filled in by the sharer's own follow-up message, if they send one.
+					recommendation: "",
 					createdAt: new Date().toISOString(),
 					rawText: content.text,
 				};
@@ -533,12 +633,14 @@ async function handleMessage(
 				records.push(record);
 			}
 			const reminderNote = scheduleArchiveReminder(feishu, records, chatId, senderId, config);
+			rememberRecommendationWindow(chatId, senderId, records, config);
 			await finishProgressCard(
 				feishu,
 				chatId,
 				progress,
 				"收录完成",
-				appendArchiveReminderNote(renderArchiveReply(records, config), reminderNote),
+				appendArchiveReminderNote(renderArchiveReply(records, config), reminderNote) +
+					renderRecommendationPrompt(config),
 				"green",
 			);
 			// The local store is the source of truth; a doc sync failure must not make a
@@ -689,6 +791,63 @@ async function addRecordsToKnowledgeDoc(feishu: FeishuClient, store: KnowledgeSt
 			return;
 		}
 	}
+}
+
+function renderRecommendationPrompt(config: Config) {
+	const minutes = config.feishu.recommendationWindowMinutes;
+	if (minutes <= 0) return "";
+	return `\n\n${minutes} 分钟内直接回一句话，我会把它记成你的推荐理由。`;
+}
+
+/** Writes the reason onto the records the window was opened for, skipping any since deleted. */
+async function attachRecommendation(
+	store: KnowledgeStore,
+	window: PendingRecommendation,
+	reason: string,
+): Promise<KnowledgeRecord[]> {
+	const ids = new Set(window.recordIds);
+	const saved: KnowledgeRecord[] = [];
+	for (const record of await store.list()) {
+		if (!ids.has(record.id)) continue;
+		const updated = { ...record, recommendation: reason };
+		await store.save(updated);
+		saved.push(updated);
+	}
+	return saved;
+}
+
+function renderRecommendationSaved(records: KnowledgeRecord[], reason: string) {
+	if (!records.length) {
+		return "这几条资料刚才已经被删掉了，推荐理由没能记上。";
+	}
+	const titles = records.map((record) => `· ${record.title}`).join("\n");
+	return `已记下你的推荐理由：\n${reason}\n\n关联到：\n${titles}\n\n如果这句话本来是要让我做别的事，回复「不是理由」我就撤掉。`;
+}
+
+/** Clears the reason written by the previous message, for when a command was misread as one. */
+async function undoLastRecommendation(
+	store: KnowledgeStore,
+	feishu: FeishuClient,
+	chatId: string,
+	senderId: string,
+): Promise<string> {
+	const last = lastRecommendations.get(chatId);
+	if (!last || last.expiresAt <= Date.now() || last.senderId !== senderId) {
+		return "我这边没有刚记下的推荐理由可以撤销。";
+	}
+	lastRecommendations.delete(chatId);
+	const ids = new Set(last.recordIds);
+	const cleared: string[] = [];
+	for (const record of await store.list()) {
+		if (!ids.has(record.id) || !record.recommendation) continue;
+		await store.save({ ...record, recommendation: "" });
+		cleared.push(record.title);
+	}
+	if (!cleared.length) return "那几条资料上已经没有推荐理由了。";
+	void feishu
+		.syncKnowledgeDoc(await store.list())
+		.catch((error) => console.error("Failed to sync Feishu knowledge doc after undoing a reason", error));
+	return `已撤销推荐理由：\n${cleared.map((title) => `· ${title}`).join("\n")}\n\n刚才那句话你可以重新发一次。`;
 }
 
 async function syncKnowledgeDocForUser(feishu: FeishuClient, store: KnowledgeStore) {
