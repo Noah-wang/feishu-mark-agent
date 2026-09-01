@@ -36,6 +36,26 @@ interface ProgressCardRef {
 	messageId?: string;
 }
 
+/**
+ * Feishu delivers events at least once, and a retry arrives with the same message_id.
+ * Without this the same link was archived twice and answered with two cards, which is
+ * what the duplicate replies in chat were. Ten minutes covers Feishu's retry window;
+ * a legitimate resend of the same text carries a different message_id, so it still runs.
+ */
+const seenMessageIds = new Map<string, number>();
+const MESSAGE_DEDUPE_TTL_MS = 10 * 60 * 1000;
+
+function isDuplicateMessage(messageId: string): boolean {
+	if (!messageId) return false;
+	const now = Date.now();
+	for (const [id, seenAt] of seenMessageIds) {
+		if (now - seenAt > MESSAGE_DEDUPE_TTL_MS) seenMessageIds.delete(id);
+	}
+	if (seenMessageIds.has(messageId)) return true;
+	seenMessageIds.set(messageId, now);
+	return false;
+}
+
 interface PendingClarification {
 	/** The message that triggered the question, so the answer can be merged back into it. */
 	originalText: string;
@@ -131,6 +151,10 @@ export function startServer(config: Config) {
 				const body = JSON.parse(rawBody);
 				const parsed = parseFeishuEvent(body, config);
 				if (parsed.challenge) return json(response, 200, { challenge: parsed.challenge });
+				if (parsed.message && isDuplicateMessage(parsed.message.messageId)) {
+					console.info(`Skipped duplicate Feishu delivery: message=${parsed.message.messageId}`);
+					return json(response, 200, {});
+				}
 				if (parsed.message) {
 					console.info(
 						`Received Feishu message: chat=${parsed.message.chatId || "-"} textLength=${parsed.message.text.length}`,
