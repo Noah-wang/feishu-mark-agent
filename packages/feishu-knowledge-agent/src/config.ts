@@ -65,6 +65,10 @@ export interface Config {
 	youtube: {
 		languages: string[];
 		timeoutMs: number;
+		/** Raw `name=value; …` header. Takes precedence over cookieFile. */
+		cookie: string;
+		/** Netscape cookies.txt, the format browser cookie exporters produce. */
+		cookieFile: string;
 	};
 	tencentCloud: {
 		secretId: string;
@@ -108,7 +112,9 @@ export async function loadConfig(): Promise<Config> {
 	// absolute KNOWLEDGE_DATA_DIR still wins, because resolve returns it unchanged.
 	const dataDir = resolve(PACKAGE_DIR, env("KNOWLEDGE_DATA_DIR", ".knowledge"));
 	await mkdir(dataDir, { recursive: true });
-	const webSearchProvider = parseWebSearchProvider(env("MARK_WEB_SEARCH_PROVIDER", env("MONID_API_KEY") ? "monid" : "brave"));
+	const webSearchProvider = parseWebSearchProvider(
+		env("MARK_WEB_SEARCH_PROVIDER", env("MONID_API_KEY") ? "monid" : "brave"),
+	);
 	const webSearchApiKey =
 		webSearchProvider === "monid"
 			? env("MARK_WEB_SEARCH_API_KEY", env("MONID_API_KEY"))
@@ -182,6 +188,8 @@ export async function loadConfig(): Promise<Config> {
 		youtube: {
 			languages: envList("YOUTUBE_CAPTION_LANGUAGES", "zh-Hans,zh-CN,zh,en"),
 			timeoutMs: envInt("YOUTUBE_TIMEOUT_MS", 20000),
+			cookie: env("YOUTUBE_COOKIE"),
+			cookieFile: resolve(env("YOUTUBE_COOKIE_FILE", resolve(PACKAGE_DIR, "vendor/youtube_cookies.txt"))),
 		},
 		tencentCloud: {
 			secretId: env("TENCENTCLOUD_SECRET_ID"),

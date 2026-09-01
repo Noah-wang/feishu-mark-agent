@@ -1,6 +1,7 @@
 .knowledge/
 .venv/
 vendor/bilibili_config.json
+vendor/youtube_cookies.txt
 vendor/tools/
 vendor/bilibili-subtitles/
 __pycache__/

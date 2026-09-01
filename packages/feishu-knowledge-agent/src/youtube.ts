@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import type { Config } from "./config.js";
 
 export interface YoutubeVideoInfo {
@@ -41,15 +42,56 @@ interface YoutubePlayerResponse {
 
 const BROWSER_USER_AGENT =
 	"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36";
+
 const ANDROID_CLIENT_VERSION = "20.01.38";
 const ANDROID_USER_AGENT = `com.google.android.youtube/${ANDROID_CLIENT_VERSION} (Linux; U; Android 14) gzip`;
+
+/**
+ * YouTube answers datacenter IPs with playabilityStatus LOGIN_REQUIRED and an empty
+ * caption list, so a signed-in cookie is the only way to read captions from a server.
+ * Measured from the Singapore host: page scraping and all four InnerTube clients came
+ * back with no caption tracks without one.
+ */
+let cookieCache: { key: string; header: string } | undefined;
+
+async function resolveCookieHeader(config: Config): Promise<string> {
+	const { cookie, cookieFile } = config.youtube;
+	if (cookie.trim()) return cookie.trim();
+	if (cookieCache?.key === cookieFile) return cookieCache.header;
+
+	const raw = await readFile(cookieFile, "utf8").catch(() => "");
+	const header = raw.trim().startsWith("#") || raw.includes("\t") ? parseNetscapeCookies(raw) : raw.trim();
+	cookieCache = { key: cookieFile, header };
+	if (header) console.info(`Loaded YouTube cookies from ${cookieFile}`);
+	return header;
+}
+
+/** Netscape cookies.txt: domain, includeSubdomains, path, secure, expiry, name, value. */
+function parseNetscapeCookies(raw: string): string {
+	const pairs: string[] = [];
+	for (const line of raw.split(/\r?\n/)) {
+		const trimmed = line.trim();
+		if (!trimmed || trimmed.startsWith("#")) continue;
+		const fields = trimmed.split("\t");
+		if (fields.length < 7) continue;
+		const [domain, , , , , name, value] = fields;
+		if (!/(^|\.)(youtube\.com|google\.com)$/i.test(domain.replace(/^\./, "."))) continue;
+		if (name) pairs.push(`${name}=${value ?? ""}`);
+	}
+	return pairs.join("; ");
+}
+
+function withCookie(headers: Record<string, string>, cookie: string): Record<string, string> {
+	return cookie ? { ...headers, Cookie: cookie } : headers;
+}
 
 export async function fetchYoutubeSubtitle(
 	videoId: string,
 	config: Config,
 	fetchImpl: typeof fetch = fetch,
 ): Promise<YoutubeExtraction> {
-	const player = await fetchPlayerResponse(videoId, config.youtube.timeoutMs, fetchImpl);
+	const cookie = await resolveCookieHeader(config);
+	const player = await fetchPlayerResponse(videoId, config.youtube.timeoutMs, fetchImpl, cookie);
 	const details = player.videoDetails ?? {};
 	const info: YoutubeVideoInfo = {
 		videoId: details.videoId || videoId,
@@ -69,7 +111,7 @@ export async function fetchYoutubeSubtitle(
 	const track = pickCaptionTrack(tracks, config.youtube.languages);
 	if (!track?.baseUrl) return { kind: "no-subtitle", info, reason: "没有找到可读取的 YouTube 字幕地址。" };
 
-	const cues = await fetchCaptionCues(track, config.youtube.timeoutMs, fetchImpl);
+	const cues = await fetchCaptionCues(track, config.youtube.timeoutMs, fetchImpl, cookie);
 	if (!cues.lines.length) return { kind: "no-subtitle", info, reason: "YouTube 字幕轨存在，但内容为空。" };
 
 	return {
@@ -85,11 +127,19 @@ async function fetchPlayerResponse(
 	videoId: string,
 	timeoutMs: number,
 	fetchImpl: typeof fetch,
+	cookie: string,
 ): Promise<YoutubePlayerResponse> {
-	const androidResponse = await fetchAndroidPlayerResponse(videoId, timeoutMs, fetchImpl).catch(() => undefined);
+	const androidResponse = await fetchAndroidPlayerResponse(videoId, timeoutMs, fetchImpl, cookie).catch(
+		() => undefined,
+	);
 	if (androidResponse?.videoDetails) return androidResponse;
 
-	const html = await getText(`https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}&hl=zh-CN`, timeoutMs, fetchImpl);
+	const html = await getText(
+		`https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}&hl=zh-CN`,
+		timeoutMs,
+		fetchImpl,
+		cookie,
+	);
 	const json = extractJsonAssignment(html, "ytInitialPlayerResponse");
 	if (!json) {
 		if (androidResponse) return androidResponse;
@@ -113,6 +163,7 @@ async function fetchAndroidPlayerResponse(
 	videoId: string,
 	timeoutMs: number,
 	fetchImpl: typeof fetch,
+	cookie: string,
 ): Promise<YoutubePlayerResponse> {
 	const controller = new AbortController();
 	const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -120,12 +171,15 @@ async function fetchAndroidPlayerResponse(
 		const response = await fetchImpl("https://www.youtube.com/youtubei/v1/player?prettyPrint=false", {
 			method: "POST",
 			signal: controller.signal,
-			headers: {
-				"Content-Type": "application/json",
-				"User-Agent": ANDROID_USER_AGENT,
-				"X-Youtube-Client-Name": "3",
-				"X-Youtube-Client-Version": ANDROID_CLIENT_VERSION,
-			},
+			headers: withCookie(
+				{
+					"Content-Type": "application/json",
+					"User-Agent": ANDROID_USER_AGENT,
+					"X-Youtube-Client-Name": "3",
+					"X-Youtube-Client-Version": ANDROID_CLIENT_VERSION,
+				},
+				cookie,
+			),
 			body: JSON.stringify({
 				videoId,
 				context: {
@@ -148,7 +202,9 @@ async function fetchAndroidPlayerResponse(
 }
 
 function pickCaptionTrack(tracks: YoutubeCaptionTrack[], preferredLanguages: string[]) {
-	return [...tracks].sort((left, right) => scoreTrack(right, preferredLanguages) - scoreTrack(left, preferredLanguages))[0];
+	return [...tracks].sort(
+		(left, right) => scoreTrack(right, preferredLanguages) - scoreTrack(left, preferredLanguages),
+	)[0];
 }
 
 function scoreTrack(track: YoutubeCaptionTrack, preferredLanguages: string[]) {
@@ -175,16 +231,23 @@ async function fetchCaptionCues(
 	track: YoutubeCaptionTrack,
 	timeoutMs: number,
 	fetchImpl: typeof fetch,
+	cookie: string,
 ): Promise<{ lines: string[]; endSeconds: number }> {
 	const url = new URL(decodeHtml(String(track.baseUrl)));
 	url.searchParams.set("fmt", "json3");
-	const raw = await getText(url.toString(), timeoutMs, fetchImpl);
+	const raw = await getText(url.toString(), timeoutMs, fetchImpl, cookie);
 	try {
 		const body = JSON.parse(raw) as Record<string, any>;
 		const entries: Array<Record<string, any>> = Array.isArray(body.events) ? body.events : [];
 		const lines = entries
 			.map((entry) =>
-				Array.isArray(entry.segs) ? entry.segs.map((seg) => String(seg.utf8 ?? "")).join("").replace(/\s+/g, " ").trim() : "",
+				Array.isArray(entry.segs)
+					? entry.segs
+							.map((seg) => String(seg.utf8 ?? ""))
+							.join("")
+							.replace(/\s+/g, " ")
+							.trim()
+					: "",
 			)
 			.filter(Boolean);
 		const endSeconds = entries.reduce(
@@ -197,17 +260,20 @@ async function fetchCaptionCues(
 	}
 }
 
-async function getText(url: string, timeoutMs: number, fetchImpl: typeof fetch) {
+async function getText(url: string, timeoutMs: number, fetchImpl: typeof fetch, cookie = "") {
 	const controller = new AbortController();
 	const timer = setTimeout(() => controller.abort(), timeoutMs);
 	try {
 		const response = await fetchImpl(url, {
 			signal: controller.signal,
-			headers: {
-				"User-Agent": url.includes("/api/timedtext") ? ANDROID_USER_AGENT : BROWSER_USER_AGENT,
-				"Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-				Referer: "https://www.youtube.com",
-			},
+			headers: withCookie(
+				{
+					"User-Agent": url.includes("/api/timedtext") ? ANDROID_USER_AGENT : BROWSER_USER_AGENT,
+					"Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+					Referer: "https://www.youtube.com",
+				},
+				cookie,
+			),
 		});
 		if (!response.ok) throw new Error(`YouTube 请求返回 HTTP ${response.status}: ${url}`);
 		return await response.text();
@@ -256,7 +322,9 @@ function parseXmlCaptions(xml: string) {
 		const attrs = match[1];
 		const start = Number(attrs.match(/\bstart="([^"]+)"/)?.[1]) || 0;
 		const duration = Number(attrs.match(/\bdur="([^"]+)"/)?.[1]) || 0;
-		const line = decodeHtml(match[2].replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ").trim();
+		const line = decodeHtml(match[2].replace(/<[^>]+>/g, " "))
+			.replace(/\s+/g, " ")
+			.trim();
 		if (line) lines.push(line);
 		endSeconds = Math.max(endSeconds, start + duration);
 	}
@@ -275,11 +343,17 @@ function captionTrackName(track: YoutubeCaptionTrack) {
 }
 
 function largestThumbnail(thumbnails: Array<{ url?: string; width?: number; height?: number }>) {
-	return [...thumbnails].sort((left, right) => (right.width ?? 0) * (right.height ?? 0) - (left.width ?? 0) * (left.height ?? 0))[0]?.url ?? "";
+	return (
+		[...thumbnails].sort(
+			(left, right) => (right.width ?? 0) * (right.height ?? 0) - (left.width ?? 0) * (left.height ?? 0),
+		)[0]?.url ?? ""
+	);
 }
 
 function normalizeLanguage(value: string | undefined) {
-	return String(value ?? "").toLowerCase().replace("_", "-");
+	return String(value ?? "")
+		.toLowerCase()
+		.replace("_", "-");
 }
 
 function decodeHtml(text: string) {
