@@ -507,7 +507,7 @@ function heuristicArchive(content: ExtractedContent) {
 		? "AI 工具"
 		: words.includes("github") || content.sourceType === "github"
 			? "开源项目"
-			: content.sourceType === "bilibili" || content.sourceType === "video"
+			: content.sourceType === "bilibili" || content.sourceType === "youtube" || content.sourceType === "video"
 				? "视频内容"
 				: "产品";
 	const excerpt = content.text.slice(0, 360);

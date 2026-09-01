@@ -62,6 +62,10 @@ export interface Config {
 		credential: { sessdata: string; biliJct: string; buvid3: string };
 		timeoutMs: number;
 	};
+	youtube: {
+		languages: string[];
+		timeoutMs: number;
+	};
 	tencentCloud: {
 		secretId: string;
 		secretKey: string;
@@ -174,6 +178,10 @@ export async function loadConfig(): Promise<Config> {
 				buvid3: env("BILIBILI_BUVID3"),
 			},
 			timeoutMs: envInt("BILIBILI_TIMEOUT_MS", 20000),
+		},
+		youtube: {
+			languages: envList("YOUTUBE_CAPTION_LANGUAGES", "zh-Hans,zh-CN,zh,en"),
+			timeoutMs: envInt("YOUTUBE_TIMEOUT_MS", 20000),
 		},
 		tencentCloud: {
 			secretId: env("TENCENTCLOUD_SECRET_ID"),

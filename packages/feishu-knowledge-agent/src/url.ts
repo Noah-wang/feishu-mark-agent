@@ -14,6 +14,7 @@ export function classifyUrl(url: string): SourceType {
 		return "x";
 	if (host === "github.com" || host.endsWith(".github.com")) return "github";
 	if (host.includes("bilibili.com") || host === "b23.tv") return "bilibili";
+	if (isYoutubeHost(host)) return "youtube";
 	if (/\.(mp4|mov|m4v|webm)(\?|$)/i.test(url)) return "video";
 	return "article";
 }
@@ -38,6 +39,30 @@ export function parseBilibiliId(url: string): string | undefined {
 		url.match(/\/video\/av(\d+)/i)?.[1] ??
 		url.match(/[?&]aid=(\d+)/i)?.[1]
 	);
+}
+
+export function parseYoutubeVideoId(url: string): string | undefined {
+	const parsed = safeUrl(url);
+	if (!parsed) return undefined;
+	const host = parsed.hostname.toLowerCase();
+	if (host === "youtu.be") return cleanYoutubeId(parsed.pathname.split("/").filter(Boolean)[0]);
+	if (!isYoutubeHost(host)) return undefined;
+
+	const fromQuery = parsed.searchParams.get("v");
+	if (fromQuery) return cleanYoutubeId(fromQuery);
+
+	const [first, second] = parsed.pathname.split("/").filter(Boolean);
+	if (["embed", "shorts", "live"].includes(first ?? "")) return cleanYoutubeId(second);
+	return undefined;
+}
+
+function isYoutubeHost(host: string) {
+	return host === "youtube.com" || host === "youtu.be" || host.endsWith(".youtube.com");
+}
+
+function cleanYoutubeId(value: string | undefined) {
+	const match = value?.match(/^[A-Za-z0-9_-]{11}/);
+	return match?.[0];
 }
 
 function safeHost(url: string) {

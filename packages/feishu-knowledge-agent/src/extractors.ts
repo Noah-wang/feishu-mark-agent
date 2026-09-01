@@ -2,12 +2,14 @@ import { spawn } from "node:child_process";
 import { type BilibiliVideoInfo, fetchBilibiliSubtitle } from "./bilibili.js";
 import type { Config } from "./config.js";
 import type { ExtractedContent } from "./types.js";
-import { classifyUrl, parseBilibiliId, parseGithubRepo, parseTweetId } from "./url.js";
+import { classifyUrl, parseBilibiliId, parseGithubRepo, parseTweetId, parseYoutubeVideoId } from "./url.js";
+import { fetchYoutubeSubtitle, type YoutubeVideoInfo } from "./youtube.js";
 
 export async function extractContent(url: string, config: Config): Promise<ExtractedContent> {
 	const sourceType = classifyUrl(url);
 	if (sourceType === "x") return extractXPost(url, config);
 	if (sourceType === "github") return extractGithub(url);
+	if (sourceType === "youtube") return extractYoutube(url, config);
 	if (sourceType === "bilibili" || sourceType === "video") return extractBilibiliOrVideo(url, config);
 	return extractArticle(url);
 }
@@ -174,6 +176,80 @@ function describeVideo(info: BilibiliVideoInfo) {
 		"视频简介：",
 		info.description || "（这个视频没有填写简介）",
 	].join("\n");
+}
+
+async function extractYoutube(url: string, config: Config): Promise<ExtractedContent> {
+	const videoId = parseYoutubeVideoId(url);
+	if (!videoId) return youtubePageFallback(url, "链接里没有可识别的 YouTube 视频 ID。", undefined);
+
+	const extraction = await fetchYoutubeSubtitle(videoId, config).catch((error) => error as Error);
+	if (extraction instanceof Error) return youtubePageFallback(url, extraction.message, videoId);
+
+	const { info } = extraction;
+	const baseMetadata = {
+		videoId: info.videoId,
+		owner: info.owner,
+		durationSeconds: info.durationSeconds,
+	};
+
+	if (extraction.kind === "subtitle") {
+		return {
+			url,
+			sourceType: "youtube",
+			title: info.title,
+			text: extraction.text,
+			images: info.coverUrl ? [info.coverUrl] : [],
+			metadata: {
+				...baseMetadata,
+				extractor: "youtube-caption-track",
+				subtitleLang: extraction.lang,
+				subtitleLines: extraction.lineCount,
+			},
+		};
+	}
+
+	return {
+		url,
+		sourceType: "youtube",
+		title: info.title,
+		text: withNoSubtitleNotice(extraction.reason, describeYoutubeVideo(info)),
+		images: info.coverUrl ? [info.coverUrl] : [],
+		metadata: {
+			...baseMetadata,
+			extractor: "youtube-metadata-fallback",
+			extractionWarning: extraction.reason,
+		},
+	};
+}
+
+function describeYoutubeVideo(info: YoutubeVideoInfo) {
+	return [
+		`标题：${info.title}`,
+		`频道：${info.owner || "未知"}`,
+		`时长：${Math.round(info.durationSeconds / 60)} 分钟`,
+		"",
+		"视频简介：",
+		info.description || "（这个视频没有填写简介，或简介未公开）",
+	].join("\n");
+}
+
+async function youtubePageFallback(
+	url: string,
+	reason: string,
+	videoId: string | undefined,
+): Promise<ExtractedContent> {
+	const article = await extractArticle(url);
+	return {
+		...article,
+		sourceType: "youtube",
+		text: withNoSubtitleNotice(reason, article.text),
+		metadata: {
+			...article.metadata,
+			videoId: videoId ?? parseYoutubeVideoId(url),
+			extractor: "youtube-page-fallback",
+			extractionWarning: reason,
+		},
+	};
 }
 
 async function bilibiliPageFallback(

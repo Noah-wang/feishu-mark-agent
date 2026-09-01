@@ -23,6 +23,10 @@
 
 ## 最新更新
 
+**2026-09-01：YouTube 字幕收录。** Mark 现在会识别 YouTube watch、shorts、embed 和
+youtu.be 链接，优先读取公开视频字幕轨；没有字幕时只归档标题、频道、时长和简介，并明确
+提示“没有拿到视频字幕”，避免模型猜内容。
+
 **2026-08-31：Monid/TinyFish 联网搜索。** Mark 的决策 Agent 现在可以用 Monid
 搜索公开网页来发现候选方案；链接收录仍走原来的 GitHub、B 站、X API 和网页读取链路。
 真实 `MONID_API_KEY` 只应放在服务器环境变量里。
@@ -75,6 +79,7 @@ Mark 检索资料库，给出带取舍分析的回答，只引用团队实际收
 |---|---|
 | GitHub | 仓库 API + README，含 star 数、语言、许可证 |
 | B 站 | 通过 B 站 web 接口拿中文字幕，含 AI 生成的字幕轨 |
+| YouTube | 读取公开视频字幕轨，优先中文，其次英文 |
 | X / Twitter | 通过 X API 拿正文、作者、媒体和互动数据 |
 | 文章网页 | Open Graph 元信息 + 正文文本 |
 
@@ -82,6 +87,9 @@ B 站有时会返回一条**属于完全无关视频的字幕轨**，而且每�
 Mark 会丢弃密度低于 10 行每分钟、或最后一句时间戳落在视频前半段的字幕轨，改为归档
 视频元信息，并在正文开头标注来源受限，避免模型凭空编造视频讲了什么。多分P 视频只
 抓取第一个分P，两项校验也按该分P的时长计算。
+
+YouTube 会优先选择 `zh-Hans`、`zh-CN`、`zh`、`en` 字幕轨，包括自动字幕。若公开视频
+没有可读字幕，Mark 只归档外围信息，并同样标注来源受限。
 
 ## 工作原理
 
@@ -158,6 +166,7 @@ npm --workspace=packages/feishu-knowledge-agent run decision-doc:create
 | 变量 | 用途 |
 |---|---|
 | `BILIBILI_SESSDATA` · `BILIBILI_BILI_JCT` · `BILIBILI_BUVID3` | B 站字幕访问 |
+| `YOUTUBE_CAPTION_LANGUAGES` | YouTube 字幕偏好，默认中文优先、英文兜底 |
 | `X_BEARER_TOKEN` | 让 X/Twitter 抽取更可靠 |
 | `MARK_WEB_SEARCH_API_KEY` | Brave Search 或自定义搜索服务的 API key |
 | `FEISHU_BITABLE_APP_TOKEN` · `FEISHU_BITABLE_TABLE_ID` | 同步结构化多维表格 |

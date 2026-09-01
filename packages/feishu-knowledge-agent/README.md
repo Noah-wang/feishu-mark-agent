@@ -11,6 +11,10 @@ Longer tasks use an interactive Feishu progress card. Mark sends one card immedi
 
 ## Recent Updates
 
+**2026-09-01:** Added YouTube caption extraction for watch, shorts, embed, and
+youtu.be links. Mark prefers Chinese captions, falls back to English, and stores
+metadata-only records with an honesty notice when no public captions are readable.
+
 **2026-08-31:** Added Monid/TinyFish as a public web search provider for the
 Decision Agent. Link archiving still uses the existing GitHub, Bilibili, X API,
 and article extraction path.
@@ -82,6 +86,7 @@ Recommended:
 - `PI_AGENT_BINARY`: the Pi binary called for analysis. Defaults to `pi`.
 - `TENCENTCLOUD_SECRET_ID`, `TENCENTCLOUD_SECRET_KEY`, `TENCENTCLOUD_REGION`, and `TENCENTCLOUD_CVM_INSTANCE_ID`: enables Tencent Cloud CVM status and monitor metrics.
 - `FEISHU_ARCHIVE_REMINDER_CHAT_ID`: sends a delayed group reminder after a link is archived.
+- `YOUTUBE_CAPTION_LANGUAGES`: caption language preference list. Defaults to `zh-Hans,zh-CN,zh,en`.
 
 ## Analysis Model
 
@@ -189,6 +194,22 @@ Optional environment overrides:
 - `BILIBILI_CONFIG_FILE`: use a different Bilibili cookie JSON file.
 - `BILIBILI_TIMEOUT_MS`: per-request timeout. Defaults to 20000.
 - `BILIBILI_TRANSCRIPT_COMMAND`: custom JSON-producing command. If set, it bypasses the built-in extractor.
+
+## YouTube Extraction
+
+Mark reads public caption tracks from YouTube watch, shorts, embed, and youtu.be
+links without a separate API key. It chooses captions in this order by default:
+`zh-Hans`, `zh-CN`, `zh`, then `en`. Automatic captions are accepted when they are
+the best available track.
+
+When no public caption track is readable, Mark archives the title, channel, duration,
+and description instead, prefixed with a `【内容来源说明】` notice so the analysis model
+states the limitation rather than guessing what the video says.
+
+Optional environment overrides:
+
+- `YOUTUBE_CAPTION_LANGUAGES`: comma-separated language preference list. Defaults to `zh-Hans,zh-CN,zh,en`.
+- `YOUTUBE_TIMEOUT_MS`: per-request timeout. Defaults to 20000.
 
 ## Browsable Feishu Doc
 

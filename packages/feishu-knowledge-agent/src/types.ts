@@ -1,9 +1,10 @@
-export type SourceType = "x" | "github" | "bilibili" | "article" | "video" | "unknown";
+export type SourceType = "x" | "github" | "bilibili" | "youtube" | "article" | "video" | "unknown";
 
 export const SOURCE_TYPE_LABELS: Record<SourceType, string> = {
 	x: "X 推文",
 	github: "GitHub 项目",
 	bilibili: "B 站视频",
+	youtube: "YouTube 视频",
 	article: "文章",
 	video: "视频",
 	unknown: "其他",
