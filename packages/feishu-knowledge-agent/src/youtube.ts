@@ -62,7 +62,7 @@ export async function fetchYoutubeSubtitle(
 
 	const tracks = player.captions?.playerCaptionsTracklistRenderer?.captionTracks ?? [];
 	if (!tracks.length) {
-		const reason = player.playabilityStatus?.reason || "这条 YouTube 视频没有公开字幕轨。";
+		const reason = youtubeNoCaptionReason(player);
 		return { kind: "no-subtitle", info, reason };
 	}
 
@@ -91,8 +91,22 @@ async function fetchPlayerResponse(
 
 	const html = await getText(`https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}&hl=zh-CN`, timeoutMs, fetchImpl);
 	const json = extractJsonAssignment(html, "ytInitialPlayerResponse");
-	if (!json) throw new Error("没有在 YouTube 页面中找到公开视频信息。");
-	return JSON.parse(json) as YoutubePlayerResponse;
+	if (!json) {
+		if (androidResponse) return androidResponse;
+		throw new Error("没有在 YouTube 页面中找到公开视频信息。");
+	}
+	const browserResponse = JSON.parse(json) as YoutubePlayerResponse;
+	if (browserResponse.videoDetails) return browserResponse;
+	return androidResponse ?? browserResponse;
+}
+
+function youtubeNoCaptionReason(player: YoutubePlayerResponse) {
+	const status = player.playabilityStatus?.status;
+	const reason = player.playabilityStatus?.reason;
+	if (status === "LOGIN_REQUIRED") {
+		return `YouTube 要求登录验证${reason ? `：${reason}` : ""}`;
+	}
+	return reason || "这条 YouTube 视频没有公开字幕轨。";
 }
 
 async function fetchAndroidPlayerResponse(

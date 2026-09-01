@@ -208,6 +208,10 @@ async function extractYoutube(url: string, config: Config): Promise<ExtractedCon
 		};
 	}
 
+	if (!hasYoutubeMetadata(info)) {
+		return youtubePageFallback(url, extraction.reason, videoId);
+	}
+
 	return {
 		url,
 		sourceType: "youtube",
@@ -220,6 +224,10 @@ async function extractYoutube(url: string, config: Config): Promise<ExtractedCon
 			extractionWarning: extraction.reason,
 		},
 	};
+}
+
+function hasYoutubeMetadata(info: YoutubeVideoInfo) {
+	return info.title !== "YouTube video" || Boolean(info.owner || info.description || info.coverUrl);
 }
 
 function describeYoutubeVideo(info: YoutubeVideoInfo) {

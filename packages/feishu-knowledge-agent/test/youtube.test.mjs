@@ -96,3 +96,24 @@ test("fetchYoutubeSubtitle returns metadata when no captions are public", async 
 	assert.equal(extraction.info.title, "No Caption Video");
 	assert.match(extraction.reason, /没有公开字幕轨/);
 });
+
+test("fetchYoutubeSubtitle surfaces YouTube login checks", async () => {
+	const playerResponse = {
+		playabilityStatus: {
+			status: "LOGIN_REQUIRED",
+			reason: "请登录，以便我们确认你不是聊天机器人",
+		},
+	};
+	const fetchImpl = async (url) => {
+		if (String(url).includes("/youtubei/v1/player")) {
+			return new Response(JSON.stringify(playerResponse), { headers: { "content-type": "application/json" } });
+		}
+		return new Response("window.ytInitialPlayerResponse = {}; </script>");
+	};
+
+	const extraction = await fetchYoutubeSubtitle("dQw4w9WgXcQ", config, fetchImpl);
+
+	assert.equal(extraction.kind, "no-subtitle");
+	assert.equal(extraction.info.title, "YouTube video");
+	assert.match(extraction.reason, /登录验证/);
+});

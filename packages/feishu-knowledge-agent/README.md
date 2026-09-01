@@ -206,6 +206,10 @@ When no public caption track is readable, Mark archives the title, channel, dura
 and description instead, prefixed with a `【内容来源说明】` notice so the analysis model
 states the limitation rather than guessing what the video says.
 
+Some cloud server IPs may receive a YouTube login verification page instead of
+caption metadata. In that case Mark falls back to page metadata and records the
+verification reason in `extractionWarning`.
+
 Optional environment overrides:
 
 - `YOUTUBE_CAPTION_LANGUAGES`: comma-separated language preference list. Defaults to `zh-Hans,zh-CN,zh,en`.
