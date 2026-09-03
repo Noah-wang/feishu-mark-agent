@@ -19,7 +19,6 @@ import type {
 	DecisionRecord,
 	FeishuDocumentTextBlock,
 	KnowledgeRecord,
-	RecentArchiveContext,
 	Recommendation,
 	RequirementPoint,
 } from "./types.js";
@@ -123,13 +122,6 @@ function rememberRecommendationWindow(chatId: string, senderId: string, records:
 		senderId,
 		expiresAt: Date.now() + minutes * 60 * 1000,
 	});
-}
-
-/** Read without consuming, so the planner can see the context before deciding. */
-function peekRecommendationWindow(chatId: string, senderId: string, config: Config): RecentArchiveContext | undefined {
-	const pending = pendingRecommendations.get(chatId);
-	if (!pending || pending.expiresAt <= Date.now() || pending.senderId !== senderId) return undefined;
-	return { titles: pending.titles, windowMinutes: config.feishu.recommendationWindowMinutes };
 }
 
 function takeRecommendationWindow(chatId: string, senderId: string): PendingRecommendation | undefined {
@@ -265,6 +257,32 @@ async function handleMessage(
 		await feishu.sendText(chatId, await undoLastRecommendation(store, feishu, chatId, senderId));
 		return;
 	}
+	// The window right after archiving is reserved: whatever the sharer types is their
+	// reason, unless it withdraws or starts a new archive. Letting the planner arbitrate
+	// here was wrong — it read a 20-character remark as a question and answered it.
+	if (pendingRecommendations.has(chatId) && !extractUrls(incomingText).length && incomingText.trim()) {
+		const window = takeRecommendationWindow(chatId, senderId);
+		if (window) {
+			const reason = incomingText.trim();
+			const saved = await attachRecommendation(store, window, reason);
+			if (saved.length) {
+				lastRecommendations.set(chatId, {
+					recordIds: saved.map((record) => record.id),
+					titles: saved.map((record) => record.title),
+					senderId,
+					expiresAt: Date.now() + RECOMMENDATION_UNDO_TTL_MS,
+				});
+			}
+			console.info(`Stored recommendation for ${saved.length} record(s): chat=${chatId}`);
+			await feishu.sendText(chatId, renderRecommendationSaved(saved, reason));
+			// These records already exist in the document, so their blocks have to be
+			// replaced rather than appended: a rebuild is the only path that does that.
+			void feishu
+				.syncKnowledgeDoc(await store.list())
+				.catch((error) => console.error("Failed to sync Feishu knowledge doc after adding a reason", error));
+			return;
+		}
+	}
 	// A reply to a clarifying question carries no context on its own ("技术方案的建议"),
 	// so it is folded back into the request that prompted the question.
 	const pending = takePendingClarification(chatId);
@@ -283,10 +301,7 @@ async function handleMessage(
 			{ label: "处理任务", state: "pending" },
 			{ label: "整理结果", state: "pending" },
 		]);
-		// The planner decides whether this is a reason or a request, with the titles of
-		// what was just archived in hand. A regex could not tell those apart.
-		const archiveContext = peekRecommendationWindow(chatId, senderId, config);
-		const agentPlan = await planAgentAction(messageText, urls, config, archiveContext);
+		const agentPlan = await planAgentAction(messageText, urls, config);
 		console.info(`Planned Feishu agent action: ${agentPlan.action} reason=${agentPlan.reason}`);
 
 		if (agentPlan.action === "add_recommendation") {

@@ -7,7 +7,6 @@ import type {
 	KnowledgeRecord,
 	MessageIntent,
 	MessageIntentName,
-	RecentArchiveContext,
 	Recommendation,
 	RequirementPoint,
 } from "./types.js";
@@ -35,15 +34,9 @@ const VALID_AGENT_ACTIONS = new Set<AgentActionName>([
 	"server_status",
 	"help",
 	"clarify",
-	"add_recommendation",
 ]);
 
-export async function planAgentAction(
-	text: string,
-	urls: string[],
-	config: Config,
-	recentArchive?: RecentArchiveContext,
-): Promise<AgentPlan> {
+export async function planAgentAction(text: string, urls: string[], config: Config): Promise<AgentPlan> {
 	const prompt = `You are Mark, an agent living in Feishu chat. You are not a menu router.
 
 Your job is to understand the user's goal, choose the best tool, and ask a clarifying question only when the goal cannot be safely acted on.
@@ -59,7 +52,6 @@ Available tools:
 - server_status: inspect Mark host or Tencent Cloud server status.
 - help: explain what Mark can do.
 - clarify: ask one focused follow-up question before acting.
-- add_recommendation: store the user's own reason for sharing what was just archived.
 
 Important behavior:
 - If the user says a document has English and asks to make it Chinese, use translate_records. Do not treat it as a recommendation question.
@@ -83,29 +75,12 @@ Important behavior:
 
 Schema:
 {
-  "action": "archive_links | ask_question | make_decision | query_decisions | list_records | delete_records | translate_records | server_status | help | clarify | add_recommendation",
+  "action": "archive_links | ask_question | make_decision | query_decisions | list_records | delete_records | translate_records | server_status | help | clarify",
   "query": "cleaned user goal in Chinese",
   "reason": "short Chinese reason",
   "question": "only when action is clarify; one Chinese question"
 }
 
-${
-	recentArchive
-		? `Just archived, ${recentArchive.windowMinutes} minute(s) ago:
-${recentArchive.titles.map((title) => `- ${title}`).join("\n")}
-
-Because something was just archived, judge whether this message is the user's own
-reason for sharing it rather than a new request:
-- A remark about the value, quality, or usefulness of what was just archived is
-  add_recommendation. It often has no verb aimed at you: "很实用", "作者思路清晰",
-  "这个能解决字幕提取的痛点".
-- Anything asking you to do something is its normal action, even if it reads casually.
-  "看一下服务器状态" is server_status, "列出最近的" is list_records.
-- If it is genuinely both, prefer the action, because a reason can be added again and
-  a missed instruction cannot.
-`
-		: ""
-}
 Message:
 ${text}
 
@@ -113,7 +88,7 @@ URLs:
 ${urls.join("\n") || "(none)"}`;
 
 	const result = await runLlmJson(prompt, config).catch(() => undefined);
-	return normalizeAgentPlan(result, text, urls, recentArchive);
+	return normalizeAgentPlan(result, text, urls);
 }
 
 export async function classifyMessageIntent(text: string, urls: string[], config: Config): Promise<MessageIntent> {
@@ -561,15 +536,8 @@ function normalizeIntent(value: any, text: string, urls: string[]): MessageInten
 	};
 }
 
-/**
- * Commands aimed at Mark, used only when no model is reachable. With one, the planner
- * makes this call with the archive context in hand, which a regex cannot approximate.
- */
-const MARK_COMMAND_PATTERN =
-	/(服务器状态|服务器负载|服务器还好|查.{0,3}服务器|看.{0,3}服务器|列出|列表|有哪些|删除|删掉|移除|改成中文|翻译一下|使用说明|怎么用|帮助|^help$)/i;
-
-function normalizeAgentPlan(value: any, text: string, urls: string[], recentArchive?: RecentArchiveContext): AgentPlan {
-	const heuristic = heuristicAgentPlan(text, urls, recentArchive);
+function normalizeAgentPlan(value: any, text: string, urls: string[]): AgentPlan {
+	const heuristic = heuristicAgentPlan(text, urls);
 	const action = VALID_AGENT_ACTIONS.has(value?.action) ? value.action : heuristic.action;
 	return {
 		action,
@@ -579,12 +547,7 @@ function normalizeAgentPlan(value: any, text: string, urls: string[], recentArch
 			typeof value?.question === "string" && value.question.trim() ? value.question.trim() : heuristic.question,
 	};
 }
-
-function heuristicAgentPlan(text: string, urls: string[], recentArchive?: RecentArchiveContext): AgentPlan {
-	const trimmed = text.trim();
-	if (recentArchive && trimmed && !urls.length && trimmed.length <= 500 && !MARK_COMMAND_PATTERN.test(trimmed)) {
-		return { action: "add_recommendation", query: trimmed, reason: "刚收录完，这句话看起来是分享理由" };
-	}
+function heuristicAgentPlan(text: string, urls: string[]): AgentPlan {
 	const intent = heuristicIntent(text, urls);
 	const normalized = text.trim();
 	if (
