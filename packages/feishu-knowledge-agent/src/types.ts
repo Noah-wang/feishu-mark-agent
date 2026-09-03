@@ -168,7 +168,7 @@ export type MessageIntentName =
 	| "server_status"
 	| "help";
 
-export type AgentActionName = MessageIntentName | "translate_records" | "clarify" | "add_recommendation";
+export type AgentActionName = MessageIntentName | "translate_records" | "clarify" | "token_usage";
 
 /**
  * Describes an archive that just happened, so the planner can tell a comment about

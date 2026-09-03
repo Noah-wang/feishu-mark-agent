@@ -11,6 +11,7 @@ import type {
 	RequirementPoint,
 } from "./types.js";
 import { SOURCE_TYPE_LABELS } from "./types.js";
+import type { UsagePurpose, UsageStore } from "./usage.js";
 
 const VALID_INTENTS = new Set<MessageIntentName>([
 	"archive_links",
@@ -34,6 +35,7 @@ const VALID_AGENT_ACTIONS = new Set<AgentActionName>([
 	"server_status",
 	"help",
 	"clarify",
+	"token_usage",
 ]);
 
 export async function planAgentAction(text: string, urls: string[], config: Config): Promise<AgentPlan> {
@@ -50,6 +52,7 @@ Available tools:
 - delete_records: remove saved records from the knowledge base.
 - translate_records: rewrite saved records that contain English into Simplified Chinese, then sync the Feishu knowledge document.
 - server_status: inspect Mark host or Tencent Cloud server status.
+- token_usage: report which model is answering, how many tokens have been spent, and the estimated cost.
 - help: explain what Mark can do.
 - clarify: ask one focused follow-up question before acting.
 
@@ -71,11 +74,13 @@ Important behavior:
   than software.
 - Questions about "last time", "previously", "why we chose", "why we did not choose", or
   decision history are query_decisions.
+- Questions about token spend, model cost, "花了多少钱", "用了多少 token", or which model is
+  running are token_usage, not server_status.
 - Return strict JSON only.
 
 Schema:
 {
-  "action": "archive_links | ask_question | make_decision | query_decisions | list_records | delete_records | translate_records | server_status | help | clarify",
+  "action": "archive_links | ask_question | make_decision | query_decisions | list_records | delete_records | translate_records | server_status | help | clarify | token_usage",
   "query": "cleaned user goal in Chinese",
   "reason": "short Chinese reason",
   "question": "only when action is clarify; one Chinese question"
@@ -87,7 +92,7 @@ ${text}
 URLs:
 ${urls.join("\n") || "(none)"}`;
 
-	const result = await runLlmJson(prompt, config).catch(() => undefined);
+	const result = await runLlmJson(prompt, config, "plan").catch(() => undefined);
 	return normalizeAgentPlan(result, text, urls);
 }
 
@@ -125,7 +130,7 @@ ${text}
 URLs:
 ${urls.join("\n") || "(none)"}`;
 
-	const result = await runLlmJson(prompt, config).catch(() => undefined);
+	const result = await runLlmJson(prompt, config, "intent").catch(() => undefined);
 	return normalizeIntent(result, text, urls);
 }
 
@@ -168,7 +173,7 @@ Metadata: ${JSON.stringify(content.metadata).slice(0, 4000)}
 Content:
 ${content.text.slice(0, 24000)}`;
 
-	const result = await runLlmJson(prompt, config)
+	const result = await runLlmJson(prompt, config, "archive")
 		.catch(() => runPiJson(prompt, config))
 		.catch(() => undefined);
 	const parsed = result ?? heuristicArchive(content);
@@ -214,7 +219,7 @@ Return strict JSON only:
 Request:
 ${question}`;
 
-	const result = await runLlmJson(prompt, config).catch(() => undefined);
+	const result = await runLlmJson(prompt, config, "requirement").catch(() => undefined);
 	const points = Array.isArray(result?.points) ? result.points : [];
 	const cleaned = points
 		.map((point: any) => ({
@@ -292,7 +297,7 @@ ${question}
 Capability points and their search results:
 ${context.slice(0, 30000)}`;
 
-	const result = await runLlmJson(prompt, config)
+	const result = await runLlmJson(prompt, config, "answer")
 		.catch(() => runPiJson(prompt, config))
 		.catch(() => undefined);
 
@@ -374,7 +379,7 @@ Key points: ${record.keyPoints.join("; ")}
 Raw text:
 ${record.rawText.slice(0, 16000)}`;
 
-	const result = await runLlmJson(prompt, config)
+	const result = await runLlmJson(prompt, config, "translate")
 		.catch(() => runPiJson(prompt, config))
 		.catch(() => undefined);
 	if (!result) return record;
@@ -413,7 +418,7 @@ ${request}
 Text:
 ${text.slice(0, 8000)}`;
 
-	const result = await runLlmJson(prompt, config)
+	const result = await runLlmJson(prompt, config, "translate")
 		.catch(() => runPiJson(prompt, config))
 		.catch(() => undefined);
 	const translated = typeof result?.text === "string" ? result.text.trim() : "";
@@ -435,10 +440,20 @@ async function runPiJson(prompt: string, config: Config): Promise<any> {
 
 /** Shared structured-output runner for agent modules that need the same LLM -> Pi fallback. */
 export async function runStructuredModel(prompt: string, config: Config): Promise<any> {
-	return runLlmJson(prompt, config).catch(() => runPiJson(prompt, config));
+	return runLlmJson(prompt, config, "decision").catch(() => runPiJson(prompt, config));
 }
 
-async function runLlmJson(prompt: string, config: Config): Promise<any> {
+/**
+ * Set once at startup. Passing a store through every analyzer signature would touch
+ * a dozen call sites for a side concern that must never change their behaviour.
+ */
+let usageStore: UsageStore | undefined;
+
+export function setUsageStore(store: UsageStore) {
+	usageStore = store;
+}
+
+async function runLlmJson(prompt: string, config: Config, purpose: UsagePurpose = "other"): Promise<any> {
 	if (!config.llm.baseUrl || !config.llm.apiKey || !config.llm.model) {
 		throw new Error("LLM service is not configured");
 	}
@@ -466,6 +481,19 @@ async function runLlmJson(prompt: string, config: Config): Promise<any> {
 		});
 		const body = (await response.json()) as any;
 		if (!response.ok) throw new Error(`LLM request failed: ${JSON.stringify(body).slice(0, 500)}`);
+		// Recorded before parsing, so a malformed reply still counts against the bill.
+		// The served model is read from the response: the gateway does not always run
+		// the configured one.
+		if (body.usage) {
+			void usageStore?.record({
+				model: String(body.model || config.llm.model || "unknown"),
+				purpose,
+				promptTokens: Number(body.usage.prompt_tokens) || 0,
+				completionTokens: Number(body.usage.completion_tokens) || 0,
+				cachedPromptTokens:
+					Number(body.usage.prompt_cache_hit_tokens ?? body.usage.prompt_tokens_details?.cached_tokens) || 0,
+			});
+		}
 		const text = body.choices?.[0]?.message?.content ?? body.choices?.[0]?.text ?? "";
 		const jsonText = String(text).match(/\{[\s\S]*\}/)?.[0];
 		if (!jsonText) throw new Error("LLM output did not contain JSON");

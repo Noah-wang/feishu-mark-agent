@@ -4,6 +4,7 @@ import {
 	answerQuestion,
 	planAgentAction,
 	planRequirementPoints,
+	setUsageStore,
 	translateRecordToChinese,
 	translateTextToChinese,
 } from "./analyzer.js";
@@ -24,6 +25,7 @@ import type {
 } from "./types.js";
 import { readableSharer } from "./types.js";
 import { extractUrls } from "./url.js";
+import { estimateCost, purposeLabel, UsageStore, type UsageSummary } from "./usage.js";
 
 type ProgressState = "pending" | "active" | "done";
 
@@ -187,6 +189,8 @@ function decisionFollowupContext(chatId: string, text: string) {
 
 export function startServer(config: Config) {
 	const store = new KnowledgeStore(config);
+	const usage = new UsageStore(config);
+	setUsageStore(usage);
 	const decisionStore = new DecisionStore(config);
 	const feishu = new FeishuClient(config);
 
@@ -217,6 +221,7 @@ export function startServer(config: Config) {
 						parsed.message.senderId,
 						store,
 						decisionStore,
+						usage,
 						feishu,
 						config,
 					).catch((error) => {
@@ -244,6 +249,7 @@ async function handleMessage(
 	senderId: string,
 	store: KnowledgeStore,
 	decisionStore: DecisionStore,
+	usage: UsageStore,
 	feishu: FeishuClient,
 	config: Config,
 ) {
@@ -303,47 +309,6 @@ async function handleMessage(
 		]);
 		const agentPlan = await planAgentAction(messageText, urls, config);
 		console.info(`Planned Feishu agent action: ${agentPlan.action} reason=${agentPlan.reason}`);
-
-		if (agentPlan.action === "add_recommendation") {
-			const window = takeRecommendationWindow(chatId, senderId);
-			// The window can close between planning and acting, and only the person who
-			// archived may write the reason.
-			if (!window) {
-				await finishProgressCard(
-					feishu,
-					chatId,
-					progress,
-					"没有可关联的收录",
-					"我这边没有刚收录、还在等推荐理由的资料。你可以先发链接，收录完成后一分钟内回一句话。",
-					"yellow",
-				);
-				return;
-			}
-			const reason = agentPlan.query?.trim() || incomingText.trim();
-			const saved = await attachRecommendation(store, window, reason);
-			if (saved.length) {
-				lastRecommendations.set(chatId, {
-					recordIds: saved.map((record) => record.id),
-					titles: saved.map((record) => record.title),
-					senderId,
-					expiresAt: Date.now() + RECOMMENDATION_UNDO_TTL_MS,
-				});
-			}
-			await finishProgressCard(
-				feishu,
-				chatId,
-				progress,
-				"已记下推荐理由",
-				renderRecommendationSaved(saved, reason),
-				"green",
-			);
-			// These records already exist in the document, so their blocks have to be
-			// replaced rather than appended: a rebuild is the only path that does that.
-			void feishu
-				.syncKnowledgeDoc(await store.list())
-				.catch((error) => console.error("Failed to sync Feishu knowledge doc after adding a reason", error));
-			return;
-		}
 
 		// Clarifying twice in a row is the failure the user sees: they answer, and Mark
 		// asks again. One question is the budget; after that, act on what we have.
@@ -520,6 +485,20 @@ async function handleMessage(
 			]);
 			const records = await pickRecordsForList(store, agentPlan.query);
 			await finishProgressCard(feishu, chatId, progress, "资料列表", renderListReply(records, config), "blue");
+			return;
+		}
+
+		if (agentPlan.action === "token_usage") {
+			const summary = await usage.summary();
+			const today = await usage.summary(1);
+			await finishProgressCard(
+				feishu,
+				chatId,
+				progress,
+				"Token 用量",
+				renderUsageReport(summary, today, config),
+				"blue",
+			);
 			return;
 		}
 
@@ -816,6 +795,64 @@ async function addRecordsToKnowledgeDoc(feishu: FeishuClient, store: KnowledgeSt
 			return;
 		}
 	}
+}
+
+function formatTokens(count: number) {
+	if (count < 10_000) return String(count);
+	if (count < 1_000_000) return `${(count / 1000).toFixed(1)}K`;
+	return `${(count / 1_000_000).toFixed(2)}M`;
+}
+
+function renderUsageReport(total: UsageSummary, today: UsageSummary, config: Config) {
+	if (!total.totalCalls) {
+		return "还没有记录到模型调用。收录一个链接或问我一个问题之后再看。";
+	}
+
+	const lines: string[] = [];
+	// The configured name is not always what answers: the gateway can route elsewhere,
+	// so the served model is reported and the configured one only noted when it differs.
+	const served = total.byModel.map((entry) => entry.model);
+	lines.push(`正在使用：${served.join("、")}`);
+	if (!served.includes(config.llm.model)) {
+		lines.push(`（配置里写的是 ${config.llm.model}，网关实际路由到了上面的模型）`);
+	}
+
+	const totalTokens = total.promptTokens + total.completionTokens;
+	lines.push("");
+	lines.push(`累计 ${total.totalCalls} 次调用，${formatTokens(totalTokens)} tokens`);
+	lines.push(`  输入 ${formatTokens(total.promptTokens)}（其中缓存命中 ${formatTokens(total.cachedPromptTokens)}）`);
+	lines.push(`  输出 ${formatTokens(total.completionTokens)}`);
+	if (total.firstDay) lines.push(`  统计区间 ${total.firstDay} 至 ${total.lastDay}`);
+
+	const totalCost = estimateCost(total, config);
+	const todayCost = estimateCost(today, config);
+	if (totalCost) {
+		lines.push("");
+		lines.push(`估算花费 ${totalCost.cost.toFixed(4)} ${totalCost.currency}`);
+		if (todayCost) lines.push(`  今天 ${todayCost.cost.toFixed(4)} ${todayCost.currency}`);
+	} else {
+		lines.push("");
+		lines.push("没有配置单价，所以只统计 token，不估算金额。");
+		lines.push("在 .env 里设 MARK_LLM_PRICE_INPUT_PER_1M 和 MARK_LLM_PRICE_OUTPUT_PER_1M 即可。");
+	}
+
+	if (today.totalCalls) {
+		lines.push("");
+		lines.push(
+			`今天 ${today.totalCalls} 次调用，${formatTokens(today.promptTokens + today.completionTokens)} tokens`,
+		);
+	}
+
+	if (total.byPurpose.length > 1) {
+		lines.push("");
+		lines.push("按用途：");
+		for (const entry of total.byPurpose.slice(0, 6)) {
+			const share = Math.round((entry.tokens / Math.max(1, totalTokens)) * 100);
+			lines.push(`  ${purposeLabel(entry.purpose)} ${formatTokens(entry.tokens)}（${share}%，${entry.calls} 次）`);
+		}
+	}
+
+	return lines.join("\n");
 }
 
 function renderRecommendationPrompt(config: Config) {

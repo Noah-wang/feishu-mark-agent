@@ -44,6 +44,8 @@ export interface Config {
 		apiKey: string;
 		model: string;
 		timeoutMs: number;
+		/** Per million tokens. The endpoint is a reseller gateway, so rates cannot be read from it. */
+		pricing: { inputPer1M: number; cachedInputPer1M: number; outputPer1M: number; currency: string };
 	};
 	decision: {
 		maxSteps: number;
@@ -96,6 +98,11 @@ function env(name: string, fallback = "") {
 
 function envInt(name: string, fallback: number) {
 	const value = Number.parseInt(env(name), 10);
+	return Number.isFinite(value) ? value : fallback;
+}
+
+function envFloat(name: string, fallback: number) {
+	const value = Number.parseFloat(env(name));
 	return Number.isFinite(value) ? value : fallback;
 }
 
@@ -164,6 +171,12 @@ export async function loadConfig(): Promise<Config> {
 			apiKey: env("MARK_LLM_API_KEY", env("THIRDPARTY_LLM_API_KEY", env("ARK_API_KEY", env("DOUBAO_API_KEY")))),
 			model: env("MARK_LLM_MODEL", env("THIRDPARTY_LLM_MODEL", env("ARK_MODEL", env("DOUBAO_TEXT_MODEL_ID")))),
 			timeoutMs: envInt("MARK_LLM_TIMEOUT_MS", 120000),
+			pricing: {
+				inputPer1M: envFloat("MARK_LLM_PRICE_INPUT_PER_1M", 0),
+				cachedInputPer1M: envFloat("MARK_LLM_PRICE_CACHED_INPUT_PER_1M", 0),
+				outputPer1M: envFloat("MARK_LLM_PRICE_OUTPUT_PER_1M", 0),
+				currency: env("MARK_LLM_PRICE_CURRENCY", "元"),
+			},
 		},
 		decision: {
 			maxSteps: clamp(envInt("MARK_DECISION_MAX_STEPS", 8), 3, 12),
