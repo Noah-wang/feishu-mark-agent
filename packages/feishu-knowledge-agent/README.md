@@ -143,11 +143,11 @@ npm --workspace=packages/feishu-knowledge-agent run decision-doc:create
 Put the returned id in `FEISHU_DECISION_DOC_ID`. If the document is not configured or cannot
 be updated, the local decision remains saved and the Feishu result card explains the mirror gap.
 
-For thebestai.net with DeepSeek:
+For thebestai.net with Qwen Flash:
 
 ```bash
 MARK_LLM_BASE_URL=https://thebestai.net/v1
-MARK_LLM_MODEL=deepseek-chat
+MARK_LLM_MODEL=qwen-flash
 MARK_LLM_API_KEY=sk_xxx
 ```
 
