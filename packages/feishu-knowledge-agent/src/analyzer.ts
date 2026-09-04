@@ -480,7 +480,15 @@ async function runLlmJson(prompt: string, config: Config, purpose: UsagePurpose 
 			}),
 		});
 		const body = (await response.json()) as any;
-		if (!response.ok) throw new Error(`LLM request failed: ${JSON.stringify(body).slice(0, 500)}`);
+		if (!response.ok) {
+			// Every caller swallows this so the bot keeps working on heuristics, which
+			// means a dead model is otherwise invisible: the only symptom is that answers
+			// quietly get worse. Log it here, once, where every path passes through.
+			console.warn(
+				`LLM call failed (${purpose}): HTTP ${response.status} model=${config.llm.model} ${JSON.stringify(body).slice(0, 300)}`,
+			);
+			throw new Error(`LLM request failed: ${JSON.stringify(body).slice(0, 500)}`);
+		}
 		// Recorded before parsing, so a malformed reply still counts against the bill.
 		// The served model is read from the response: the gateway does not always run
 		// the configured one.
