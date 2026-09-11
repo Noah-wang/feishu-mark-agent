@@ -36,6 +36,7 @@ const VALID_AGENT_ACTIONS = new Set<AgentActionName>([
 	"help",
 	"clarify",
 	"token_usage",
+	"product_hunt",
 ]);
 
 export async function planAgentAction(text: string, urls: string[], config: Config): Promise<AgentPlan> {
@@ -53,6 +54,7 @@ Available tools:
 - translate_records: rewrite saved records that contain English into Simplified Chinese, then sync the Feishu knowledge document.
 - server_status: inspect Mark host or Tencent Cloud server status.
 - token_usage: report which model is answering, how many tokens have been spent, and the estimated cost.
+- product_hunt: show the latest products launched on Product Hunt.
 - help: explain what Mark can do.
 - clarify: ask one focused follow-up question before acting.
 
@@ -76,11 +78,13 @@ Important behavior:
   decision history are query_decisions.
 - Questions about token spend, model cost, "花了多少钱", "用了多少 token", or which model is
   running are token_usage, not server_status.
+- Requests for Product Hunt, "今天有什么新产品", "有什么新品", or new product launches are
+  product_hunt. This reads a live feed, so it works even with nothing saved.
 - Return strict JSON only.
 
 Schema:
 {
-  "action": "archive_links | ask_question | make_decision | query_decisions | list_records | delete_records | translate_records | server_status | help | clarify | token_usage",
+  "action": "archive_links | ask_question | make_decision | query_decisions | list_records | delete_records | translate_records | server_status | help | clarify | token_usage | product_hunt",
   "query": "cleaned user goal in Chinese",
   "reason": "short Chinese reason",
   "question": "only when action is clarify; one Chinese question"

@@ -13,6 +13,8 @@ import { answerDecisionHistory, type DecisionProgress, runDecisionAgent } from "
 import { DecisionStore } from "./decisionStore.js";
 import { extractContent } from "./extractors.js";
 import { type FeishuCard, FeishuClient, parseFeishuEvent, verifyFeishuSignature } from "./feishu.js";
+import { fetchProductHunt, topEntries } from "./productHunt.js";
+import { renderProductHuntDigest, startProductHuntDigest } from "./productHuntDigest.js";
 import { collectServerStatus, renderServerStatusReport } from "./serverStatus.js";
 import { KnowledgeStore } from "./store.js";
 import type {
@@ -235,6 +237,8 @@ export function startServer(config: Config) {
 			return json(response, 500, { error: error instanceof Error ? error.message : String(error) });
 		}
 	});
+
+	startProductHuntDigest(feishu, config);
 
 	server.listen(config.port, () => {
 		console.log(`Feishu knowledge agent listening on http://127.0.0.1:${config.port}`);
@@ -498,6 +502,24 @@ async function handleMessage(
 				"Token 用量",
 				renderUsageReport(summary, today, config),
 				"blue",
+			);
+			return;
+		}
+
+		if (agentPlan.action === "product_hunt") {
+			await updateProgressCard(feishu, progress, "Mark 正在看 Product Hunt", [
+				{ label: "理解消息", state: "done" },
+				{ label: "读取 Product Hunt", state: "active" },
+				{ label: "整理结果", state: "pending" },
+			]);
+			const entries = topEntries(await fetchProductHunt(config), config.productHunt.maxItems);
+			await finishProgressCard(
+				feishu,
+				chatId,
+				progress,
+				"Product Hunt 新品",
+				renderProductHuntDigest(entries),
+				"orange",
 			);
 			return;
 		}
@@ -1386,7 +1408,7 @@ async function finishProgressCard(
 	progress: ProgressCardRef,
 	title: string,
 	text: string,
-	template: "blue" | "green" | "purple" | "red" | "turquoise" | "yellow",
+	template: "blue" | "green" | "purple" | "red" | "turquoise" | "yellow" | "orange",
 ) {
 	const card = renderResultCard(title, text, template);
 	if (progress.messageId) {
@@ -1420,7 +1442,7 @@ function renderProgressCard(title: string, steps: ProgressStep[]): FeishuCard {
 function renderResultCard(
 	title: string,
 	text: string,
-	template: "blue" | "green" | "purple" | "red" | "turquoise" | "yellow",
+	template: "blue" | "green" | "purple" | "red" | "turquoise" | "yellow" | "orange",
 ): FeishuCard {
 	return {
 		config: { wide_screen_mode: true, update_multi: true },

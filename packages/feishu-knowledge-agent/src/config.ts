@@ -66,6 +66,14 @@ export interface Config {
 		credential: { sessdata: string; biliJct: string; buvid3: string };
 		timeoutMs: number;
 	};
+	productHunt: {
+		/** Empty disables the daily push; on-demand queries still work. */
+		digestChatId: string;
+		/** Hour of the server's local day to push at. */
+		digestHour: number;
+		maxItems: number;
+		timeoutMs: number;
+	};
 	youtube: {
 		languages: string[];
 		timeoutMs: number;
@@ -200,6 +208,12 @@ export async function loadConfig(): Promise<Config> {
 				buvid3: env("BILIBILI_BUVID3"),
 			},
 			timeoutMs: envInt("BILIBILI_TIMEOUT_MS", 20000),
+		},
+		productHunt: {
+			digestChatId: env("PRODUCT_HUNT_DIGEST_CHAT_ID"),
+			digestHour: clamp(envInt("PRODUCT_HUNT_DIGEST_HOUR", 10), 0, 23),
+			maxItems: clamp(envInt("PRODUCT_HUNT_MAX_ITEMS", 8), 1, 20),
+			timeoutMs: envInt("PRODUCT_HUNT_TIMEOUT_MS", 20000),
 		},
 		youtube: {
 			languages: envList("YOUTUBE_CAPTION_LANGUAGES", "zh-Hans,zh-CN,zh,en"),
