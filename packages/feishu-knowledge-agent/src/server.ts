@@ -14,7 +14,7 @@ import { DecisionStore } from "./decisionStore.js";
 import { extractContent } from "./extractors.js";
 import { type FeishuCard, FeishuClient, parseFeishuEvent, verifyFeishuSignature } from "./feishu.js";
 import { fetchProductHunt, topEntries } from "./productHunt.js";
-import { renderProductHuntDigest, startProductHuntDigest } from "./productHuntDigest.js";
+import { localizeEntries, renderProductHuntDigest, startProductHuntDigest } from "./productHuntDigest.js";
 import { collectServerStatus, renderServerStatusReport } from "./serverStatus.js";
 import { KnowledgeStore } from "./store.js";
 import type {
@@ -512,7 +512,10 @@ async function handleMessage(
 				{ label: "读取 Product Hunt", state: "active" },
 				{ label: "整理结果", state: "pending" },
 			]);
-			const entries = topEntries(await fetchProductHunt(config), config.productHunt.maxItems);
+			const entries = await localizeEntries(
+				topEntries(await fetchProductHunt(config), config.productHunt.maxItems),
+				config,
+			);
 			await finishProgressCard(
 				feishu,
 				chatId,

@@ -9,6 +9,7 @@
 
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { translateProductHuntTaglines } from "./analyzer.js";
 import type { Config } from "./config.js";
 import type { FeishuCard, FeishuClient } from "./feishu.js";
 import { fetchProductHunt, localDay, type ProductHuntEntry, topEntries } from "./productHunt.js";
@@ -52,7 +53,7 @@ async function maybePush(statePath: string, chatId: string, feishu: FeishuClient
 		return;
 	}
 
-	await feishu.sendCard(chatId, renderProductHuntCard(entries, now));
+	await feishu.sendCard(chatId, renderProductHuntCard(await localizeEntries(entries, config), now));
 	await writeFile(statePath, JSON.stringify({ lastPushedDay: today }, null, 2), "utf8");
 	console.info(`Sent Product Hunt digest: items=${entries.length} chat=${chatId}`);
 }
@@ -64,6 +65,15 @@ async function readLastPushedDay(statePath: string): Promise<string> {
 	} catch {
 		return "";
 	}
+}
+
+/** Chinese descriptions, English product names: the names are how you search for them. */
+export async function localizeEntries(entries: ProductHuntEntry[], config: Config): Promise<ProductHuntEntry[]> {
+	const taglines = await translateProductHuntTaglines(
+		entries.map((entry) => entry.tagline),
+		config,
+	);
+	return entries.map((entry, index) => ({ ...entry, tagline: taglines[index] ?? entry.tagline }));
 }
 
 export function renderProductHuntCard(entries: ProductHuntEntry[], now = new Date()): FeishuCard {

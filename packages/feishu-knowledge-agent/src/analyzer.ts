@@ -401,6 +401,56 @@ ${record.rawText.slice(0, 16000)}`;
 	};
 }
 
+/**
+ * Translates the digest taglines in one call rather than one per product.
+ *
+ * On any failure the English originals are returned: a digest in the source
+ * language is still useful, and a partial or reordered translation would put the
+ * wrong description under a product name.
+ */
+export async function translateProductHuntTaglines(taglines: string[], config: Config): Promise<string[]> {
+	const indexed = taglines.map((line, index) => ({ line, index })).filter((item) => item.line.trim());
+	if (!indexed.length) return taglines;
+
+	const prompt = `Translate each Product Hunt product description into natural Simplified Chinese.
+
+Return strict JSON only:
+{
+  "taglines": ["\u8bd1\u6587 1", "\u8bd1\u6587 2"]
+}
+
+Rules:
+- Return exactly ${indexed.length} items, in the same order. Never merge, split, add, or drop items.
+- Keep product names, company names, URLs, and code-like identifiers in their original spelling.
+- These are marketing one-liners. Keep them short and idiomatic, not literal.
+- Do not add facts that are not in the original.
+
+Lines:
+${indexed.map((item, position) => `${position + 1}. ${item.line}`).join("\n")}`;
+
+	try {
+		const parsed = await runLlmJson(prompt, config, "translate");
+		const translated = parsed?.taglines;
+		if (!Array.isArray(translated) || translated.length !== indexed.length) {
+			console.warn(
+				`Product Hunt tagline translation returned ${Array.isArray(translated) ? translated.length : "no"} items for ${indexed.length} lines; keeping English`,
+			);
+			return taglines;
+		}
+		const result = [...taglines];
+		indexed.forEach((item, position) => {
+			const value = translated[position];
+			if (typeof value === "string" && value.trim()) result[item.index] = value.trim();
+		});
+		return result;
+	} catch (error) {
+		console.warn(
+			`Product Hunt tagline translation failed: ${error instanceof Error ? error.message : String(error)}`,
+		);
+		return taglines;
+	}
+}
+
 export async function translateTextToChinese(text: string, request: string, config: Config): Promise<string> {
 	const prompt = `You are editing a Feishu knowledge-base document. Translate or rewrite the provided text into natural Simplified Chinese.
 
